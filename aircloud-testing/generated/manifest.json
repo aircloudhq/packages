@@ -1,0 +1,71 @@
+{
+  "generator": "scripts/dev/gen-aircloud-testing.sh",
+  "package": "aircloud:capability@1.0.0",
+  "sources": [
+    "contracts/capability/v1/world.wit",
+    "contracts/functions/v1/guest.wit",
+    "contracts/capability/v1/capabilities.json",
+    "contracts/capability/v1/errors.json",
+    "contracts/flex/v1/errors.json",
+    "contracts/functions/v1/errors.json",
+    "contracts/comms/v1/errors.json",
+    "contracts/metering/v1/meter-registry.json",
+    "functions/builders/js-platform-prelude.js",
+    "contracts/functions/v1/correlation-v1.json"
+  ],
+  "interfaces": {
+    "flex-query": [
+      "query",
+      "get-record"
+    ],
+    "flex-mutate": [
+      "create-record",
+      "update-record",
+      "delete-record"
+    ],
+    "flex-schema": [
+      "create-entity",
+      "list-entities",
+      "get-entity",
+      "delete-entity",
+      "add-field",
+      "update-field",
+      "remove-field",
+      "update-entity"
+    ],
+    "quota": [
+      "check"
+    ],
+    "credential": [
+      "egress",
+      "hmac-sign",
+      "hmac-verify"
+    ],
+    "bus": [
+      "publish"
+    ],
+    "comms-mail": [
+      "send"
+    ],
+    "comms-whatsapp": [
+      "send"
+    ],
+    "comms-consent": [
+      "grant",
+      "revoke",
+      "list-consents"
+    ],
+    "comms-suppression": [
+      "list-suppressions"
+    ],
+    "i18n": [
+      "locales",
+      "bundle",
+      "key-missing"
+    ]
+  },
+  "runtime": [
+    "i18n"
+  ],
+  "unbound": []
+}

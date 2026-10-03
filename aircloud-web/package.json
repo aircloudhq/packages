@@ -1,0 +1,74 @@
+{
+  "name": "@aircloudhq/web",
+  "version": "1.0.2",
+  "description": "The application package of an Air-Cloud product: the Rails Action View helpers, i18n over the product's locale bundle, resource pages over its models, and React bindings, for its site and its JavaScript functions.",
+  "keywords": [
+    "aircloud",
+    "rails",
+    "action-view",
+    "helpers",
+    "i18n",
+    "react",
+    "site",
+    "functions"
+  ],
+  "homepage": "https://github.com/aircloudhq/packages/tree/main/aircloud-web#readme",
+  "bugs": {
+    "url": "https://github.com/aircloudhq/packages/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aircloudhq/packages.git",
+    "directory": "aircloud-web"
+  },
+  "author": "Air-Cloud",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": "^24.21.0"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./helpers/number": "./src/helpers/number.js",
+    "./helpers/date": "./src/helpers/date.js",
+    "./helpers/text": "./src/helpers/text.js",
+    "./helpers/translation": "./src/helpers/translation.js",
+    "./helpers/url": "./src/helpers/url.js",
+    "./helpers/navigation": "./src/helpers/navigation.js",
+    "./helpers/sanitize": "./src/helpers/sanitize.js",
+    "./helpers/tag": "./src/helpers/tag.js",
+    "./helpers/form": "./src/helpers/form.js",
+    "./model": "./src/model.js",
+    "./resource": "./src/resource.js",
+    "./api": "./src/api.js",
+    "./i18n": "./src/i18n/index.js",
+    "./function": "./src/function.js",
+    "./react": "./src/react/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "dependencies": {
+    "react-router": "8.4.0"
+  },
+  "peerDependencies": {
+    "react": ">=19.2.7",
+    "react-dom": ">=19.2.7"
+  },
+  "devDependencies": {
+    "jsdom": "30.1.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "vitest": "5.0.2"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

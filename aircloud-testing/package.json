@@ -1,0 +1,61 @@
+{
+  "name": "@aircloudhq/testing",
+  "version": "1.0.3",
+  "description": "In-memory capability doubles for Air-Cloud JavaScript functions, generated from the aircloud:capability WIT contract, plus the fetch-event harness for node:test unit tests.",
+  "keywords": [
+    "aircloud",
+    "testing",
+    "test-doubles",
+    "wasm",
+    "wit",
+    "node-test",
+    "functions"
+  ],
+  "homepage": "https://github.com/aircloudhq/packages/tree/main/aircloud-testing#readme",
+  "bugs": {
+    "url": "https://github.com/aircloudhq/packages/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aircloudhq/packages.git",
+    "directory": "aircloud-testing"
+  },
+  "author": "Air-Cloud",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": "^24.21.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./register": "./register.js",
+    "./capability/*": {
+      "types": "./generated/bindings/*.d.ts",
+      "default": "./generated/bindings/*.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "register.js",
+    "hooks.js",
+    "src/",
+    "generated/",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "./register.js"
+  ],
+  "scripts": {
+    "test": "node --import ./register.js --test test/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
