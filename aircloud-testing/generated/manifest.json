@@ -62,10 +62,17 @@
       "locales",
       "bundle",
       "key-missing"
+    ],
+    "principal": [
+      "current",
+      "flash",
+      "set-flash",
+      "csrf-token"
     ]
   },
   "runtime": [
-    "i18n"
+    "i18n",
+    "principal"
   ],
   "unbound": []
 }

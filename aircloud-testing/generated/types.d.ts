@@ -154,3 +154,13 @@ export namespace CommsSuppression {
 
 export namespace I18n {
 }
+
+export namespace Principal {
+  export interface EndUser {
+    sub: string;
+    tenantId: string;
+    orgPath: string;
+    roles: Array<string>;
+    act?: string;
+  }
+}

@@ -13,7 +13,8 @@ export const CONTRACT = deepFreeze({
     "comms-whatsapp",
     "comms-consent",
     "comms-suppression",
-    "i18n"
+    "i18n",
+    "principal"
   ],
   "specifiers": {
     "aircloud:capability/bus@1.0.0": "bus",
@@ -26,10 +27,12 @@ export const CONTRACT = deepFreeze({
     "aircloud:capability/flex-query@1.0.0": "flex-query",
     "aircloud:capability/flex-schema@1.0.0": "flex-schema",
     "aircloud:capability/quota@1.0.0": "quota",
-    "aircloud:functions/i18n@1.0.0": "i18n"
+    "aircloud:functions/i18n@1.0.0": "i18n",
+    "aircloud:functions/principal@1.0.0": "principal"
   },
   "runtime": [
-    "i18n"
+    "i18n",
+    "principal"
   ],
   "wit": {
     "package": "aircloud:capability",
@@ -1588,6 +1591,114 @@ export const CONTRACT = deepFreeze({
               }
             ],
             "result": null
+          }
+        ]
+      },
+      {
+        "name": "principal",
+        "types": {
+          "end-user": {
+            "kind": "record",
+            "fields": [
+              {
+                "name": "sub",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "tenant-id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "org-path",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "roles",
+                "type": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "prim",
+                    "name": "string"
+                  }
+                }
+              },
+              {
+                "name": "act",
+                "type": {
+                  "kind": "option",
+                  "of": {
+                    "kind": "prim",
+                    "name": "string"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "functions": [
+          {
+            "name": "current",
+            "params": [],
+            "result": {
+              "kind": "option",
+              "of": {
+                "kind": "named",
+                "iface": "principal",
+                "name": "end-user"
+              }
+            }
+          },
+          {
+            "name": "flash",
+            "params": [],
+            "result": {
+              "kind": "option",
+              "of": {
+                "kind": "prim",
+                "name": "string"
+              }
+            }
+          },
+          {
+            "name": "set-flash",
+            "params": [
+              {
+                "name": "message",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "csrf-token",
+            "params": [],
+            "result": {
+              "kind": "option",
+              "of": {
+                "kind": "prim",
+                "name": "string"
+              }
+            }
           }
         ]
       }

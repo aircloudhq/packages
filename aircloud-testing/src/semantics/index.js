@@ -21,6 +21,7 @@ import { CONSENT_HTTPERR_CODES, createCommsState } from "./comms.js";
 import { createCredentialState } from "./credential.js";
 import { createFlexState, FLEX_METERS } from "./flex.js";
 import { createI18nState } from "./i18n.js";
+import { createPrincipalState } from "./principal.js";
 import { createQuotaState } from "./quota.js";
 
 export const STATE_FACTORIES = {
@@ -30,6 +31,7 @@ export const STATE_FACTORIES = {
   bus: createBusState,
   comms: createCommsState,
   i18n: createI18nState,
+  principal: createPrincipalState,
 };
 
 export const SEMANTICS = {
@@ -61,6 +63,10 @@ export const SEMANTICS = {
   "i18n.locales": (w) => w.i18n.locales(),
   "i18n.bundle": (w, locale) => w.i18n.bundle(locale),
   "i18n.key-missing": (w, locale, key) => w.i18n.keyMissing(locale, key),
+  "principal.current": (w) => w.principal.current(),
+  "principal.flash": (w) => w.principal.flash(),
+  "principal.set-flash": (w, message) => w.principal.setFlash(message),
+  "principal.csrf-token": (w) => w.principal.csrfToken(),
 };
 
 /** Gated meters the semantics admit under — each must be `gated` in the metering registry. */
