@@ -34,6 +34,10 @@ export function createPrincipalState(w) {
         csrf: csrf ?? `${w.newId()}${w.newId()}`.replace(/-/g, ""),
       };
     },
+    /** End the session: the invocations that follow serve a public route again. */
+    signOut() {
+      session = null;
+    },
     current() {
       if (!session) return undefined;
       const { sub, tenantId, orgPath, roles, act } = session;

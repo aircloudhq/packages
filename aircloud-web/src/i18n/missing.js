@@ -33,3 +33,33 @@ export function createMissingReporter({ release, locale, send }) {
     }
   };
 }
+
+const FORMAT_KEY = /^(date|time)\.formats\.(.+)$/;
+
+/** The rule a missing date/time format breaks (#664 item 28): an instant reads time.formats, a civil date date.formats. */
+function formatHint(key) {
+  const m = FORMAT_KEY.exec(key);
+  if (!m) return '';
+  const [, kind, name] = m;
+  return kind === 'time'
+    ? ` A Date or a timestamp is an instant and reads time.formats.${name}; pass a civil date as "YYYY-MM-DD" to read date.formats.${name}.`
+    : ` A "YYYY-MM-DD" string is a civil date and reads date.formats.${name}; an instant (a Date) reads time.formats.${name}.`;
+}
+
+/**
+ * The reporter of a page with no release to report to (a dev server, a preview, a test): a key still
+ * unresolved after its chain is rendered humanized and warned on the console — never silently — once per
+ * key per page load (at most MAX_KEYS_PER_PAGE_LOAD keys); a missing date/time format names the
+ * instant-vs-civil-date rule.
+ * @param {{locale: string, warn?: (message: string) => void}} init  `warn` defaults to console.warn
+ * @returns {(key: string) => void}
+ */
+export function createDevReporter({ locale, warn }) {
+  const seen = new Set();
+  const out = warn ?? ((message) => console.warn(message));
+  return (key) => {
+    if (seen.has(key) || seen.size >= MAX_KEYS_PER_PAGE_LOAD) return;
+    seen.add(key);
+    out(`@aircloudhq/web i18n: missing "${key}" (locale ${locale}) — rendered humanized.${formatHint(key)}`);
+  };
+}

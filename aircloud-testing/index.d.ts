@@ -55,6 +55,37 @@ export interface World {
   };
   linkArm(capability: string): "real" | "capture" | "deny" | "test-mode";
   flex: {
+    /**
+     * The bearer the function's Flex calls carry — the runtime's service account at `/` by default. A
+     * signed-in end user (`world.principal.signIn`) rides it as the host's assertion; the session runs at
+     * that end user's node and, on an entity declaring `owner`, sees only what it owns (ADR-257).
+     */
+    bearer: { plane: "service" | "end_user" | "internal" | "builder"; sub: string; roles: string[] | null; org_path: string };
+    /**
+     * Converge the base layer as PUT /v1/schema does: the declaration db/schema/*.toml compiles to (owner,
+     * owner_bypass_roles, shared; an enum's values and removed_values — ADR-258; a field's tagged default
+     * and the product time zone with its locale-bundle rules — ADR-259, both zone keys required). Returns
+     * the update ops it applied to live fields (`update_enum_values`, `update_default`).
+     */
+    declare(declaration: {
+      time_zone: string;
+      time_zone_rules: { initial: object; transitions: object[]; rule: object | null };
+      entities: Record<string, {
+        display_name?: string | null;
+        owner?: string | null;
+        owner_bypass_roles?: string[] | null;
+        shared?: boolean | null;
+        fields?: Record<string, {
+          type: string; display_name?: string | null; required?: boolean | null; removed?: boolean | null;
+          target?: string | null; dims?: number | null; values?: string[] | null; removed_values?: string[] | null;
+          default?: { value: unknown } | { generator: "now" | "today" } | null;
+        }> | null;
+      }>;
+    }): { applied: Array<{ op: string; entity: string; field?: string }> };
+    /** The seed surface (PUT …/records/by-key/{key}); refused for an acting end user. */
+    upsertByKey(entity: string, key: string, data: Record<string, unknown>): { created: boolean; record: { id: string; data: Record<string, unknown> } };
+    /** How many relation edges the current session sees pointing to, or leaving, a record. */
+    edges(endpoint: { to: string } | { from: string }): number;
     defineEntity(spec: { name: string; display_name?: string; fields: Array<{ name: string; type: string; display_name?: string; required?: boolean; config?: object }> }): any;
     insert(entity: string, data: Record<string, unknown>): { id: string; data: Record<string, unknown> };
     records(entity: string): Array<{ id: string; data: Record<string, unknown> }>;

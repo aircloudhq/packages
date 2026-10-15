@@ -11,13 +11,14 @@ import { zoneAt } from './zone.js';
 export { pluralCategory, operands } from './plural.js';
 export { zoneAt } from './zone.js';
 export { negotiateLocale, lookupLocale, acceptLanguage, localeFromUrl } from './negotiate.js';
-export { createMissingReporter } from './missing.js';
+export { createDevReporter, createMissingReporter } from './missing.js';
 
 /** The locale that ends every run-time chain with the platform defaults (S4 § [i18n]). */
 export const PLATFORM_TERMINAL_LOCALE = 'en';
 
 const PLURAL_KEYS = ['zero', 'one', 'two', 'few', 'many', 'other'];
-const OPTION_KEYS = new Set(['scope', 'default', 'count', 'lazy', 'context', 'locale']);
+/** The keys of a `t` call's options; every other key is an interpolation argument. */
+export const OPTION_KEYS = new Set(['scope', 'default', 'count', 'lazy', 'context', 'locale']);
 
 // ── chains ───────────────────────────────────────────────────────────────────────────────────
 
@@ -229,10 +230,19 @@ export function localize(bundle, locale, value, options = {}, report = () => {})
 
 // ── numbers ──────────────────────────────────────────────────────────────────────────────────
 
-/** ActiveSupport::NumberHelper::NumberConverter::DEFAULTS. */
+/** CLDR's generic currency sign (ISO 4217 XXX, "no currency"): the unit when none resolves (ADR-255 D5). */
+export const GENERIC_CURRENCY_SIGN = '¤';
+/** The key a currency rendering with no currency reports through the missing-key channel (ADR-255 D5). */
+export const CURRENCY_MISSING_KEY = 'number.currency.code';
+
+/**
+ * ActiveSupport::NumberHelper::NumberConverter::DEFAULTS — except the currency unit, which is never a
+ * locale or platform default (ADR-255): `¤`, CLDR's generic currency sign, stands until the product
+ * currency or the call's own `unit` resolves it.
+ */
 export const NUMBER_DEFAULTS = {
   format: { separator: '.', delimiter: ',', precision: 3, significant: false, strip_insignificant_zeros: false },
-  currency: { format: '%u%n', negative_format: '-%u%n', unit: '$', separator: '.', delimiter: ',', precision: 2, significant: false, strip_insignificant_zeros: false },
+  currency: { format: '%u%n', negative_format: '-%u%n', unit: GENERIC_CURRENCY_SIGN, separator: '.', delimiter: ',', precision: 2, significant: false, strip_insignificant_zeros: false },
   percentage: { delimiter: '', format: '%n%' },
   precision: { delimiter: '' },
   human: {
@@ -243,17 +253,81 @@ export const NUMBER_DEFAULTS = {
 };
 
 /**
+ * A monetary value — `{amount, currency}`, a decimal string and the ISO 4217 code it is in (ADR-255
+ * decision 8, D34: an amount carries its own currency, and the product currency never restates it) —
+ * or null for a plain number. A value naming a currency whose amount is not a decimal string (G12:
+ * never a binary float) or whose code is not ISO 4217-shaped is refused.
+ */
+export function moneyValue(value) {
+  if (value === null || typeof value !== 'object' || !Object.hasOwn(value, 'currency')) return null;
+  const { amount, currency } = value;
+  if (typeof amount !== 'string') {
+    throw new TypeError(`a monetary value's amount is a decimal string such as "79.90", not ${JSON.stringify(amount)}`);
+  }
+  parseDecimal(amount);
+  if (typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency)) {
+    throw new TypeError(`a monetary value's currency is an ISO 4217 code such as "USD", not ${JSON.stringify(currency)}`);
+  }
+  return { amount, currency };
+}
+
+/**
  * The effective options of a number style (Rails' i18n_format_options): defaults, then the first
  * `number.format` hash of the locale's declared chain (else its CLDR symbols), then the first
- * `number.<namespace>.format` hash of the run-time chain, then the call's options.
+ * `number.<namespace>.format` hash of the run-time chain, then the call's options. For `currency`
+ * the unit and precision then resolve from the value's own currency (`valueCurrency`, a monetary
+ * value's code) or the product currency (currencyOptions).
  */
-export function numberOptions(bundle, locale, namespace, options = {}) {
+export function numberOptions(bundle, locale, namespace, options = {}, report = () => {}, valueCurrency = undefined) {
   const base = firstIn(bundle, declaredChain(bundle, locale), 'number.format', isObject)?.value
     ?? cldrNumberFormat(bundle, locale)
     ?? firstIn(bundle, runtimeChain(bundle, locale), 'number.format', isObject)?.value
     ?? {};
   const ns = namespace ? firstIn(bundle, runtimeChain(bundle, locale), `number.${namespace}.format`, isObject)?.value ?? {} : {};
-  return { ...NUMBER_DEFAULTS.format, ...(namespace ? NUMBER_DEFAULTS[namespace] ?? {} : {}), ...base, ...ns, ...options };
+  const o = { ...NUMBER_DEFAULTS.format, ...(namespace ? NUMBER_DEFAULTS[namespace] ?? {} : {}), ...base, ...ns, ...options };
+  return namespace === 'currency' ? currencyOptions(bundle, locale, o, options, report, valueCurrency) : o;
+}
+
+/**
+ * The currency of a rendering (ADR-255 decisions 2, 3, 5, 8). The currency is the value's own (a
+ * monetary value's code, which must be in the bundle's active set) else the product currency. The unit
+ * is the call's explicit `unit`, else that currency's CLDR symbol in this locale, else `¤` — reported
+ * once as `number.currency.code`, never a guessed currency; a locale file's `unit` is not read. The
+ * precision is the call's explicit `precision`, else that currency's minor unit (CLDR's DEFAULT when
+ * there is none); a locale file's `precision` is not read. Where the symbol directly touches the number
+ * (`%u%n`, `%n%u`) the locale's CLDR currencySpacing is inserted.
+ */
+function currencyOptions(bundle, locale, o, options, report, valueCurrency) {
+  const facts = bundle.currency;
+  if (valueCurrency !== undefined && !Object.hasOwn(facts?.minor_units ?? {}, valueCurrency)) {
+    throw new RangeError(`currency ${valueCurrency} is not an ISO 4217 currency in tender use at the bundle's CLDR`);
+  }
+  const code = valueCurrency ?? facts?.code ?? null;
+  const minor = code ? facts.minor_units?.[code] : facts?.default_minor_unit;
+  const out = { ...o, precision: options.precision ?? minor ?? o.precision };
+  if (options.unit !== undefined) return out;
+  const symbol = code ? facts.symbols?.[locale]?.[code] : undefined;
+  if (!symbol) {
+    report(CURRENCY_MISSING_KEY);
+    return { ...out, unit: GENERIC_CURRENCY_SIGN };
+  }
+  const spaced = (format) => format.replace('%u%n', `%u${symbol.prefix_spacing}%n`).replace('%n%u', `%n${symbol.suffix_spacing}%u`);
+  return { ...out, unit: symbol.symbol, format: spaced(out.format), negative_format: spaced(out.negative_format) };
+}
+
+/** number_to_currency's rendering of a decimal over resolved currency options. */
+export function renderCurrency(d, o) {
+  const rounded = formatRounded(abs(d), o);
+  const zero = /^[^1-9]*$/.test(rounded);
+  const format = d.neg && !zero ? o.negative_format : o.format;
+  return format.replace('%n', rounded).replace('%u', o.unit);
+}
+
+/** number_to_currency over the bundle: a plain number in the product currency, a monetary value in its own. */
+export function formatCurrency(bundle, locale, value, options = {}, report = () => {}) {
+  const money = moneyValue(value);
+  const o = numberOptions(bundle, locale, 'currency', options, report, money?.currency);
+  return renderCurrency(parseDecimal(money ? money.amount : value), o);
 }
 
 function cldrNumberFormat(bundle, locale) {
@@ -278,7 +352,7 @@ export function formatRounded(value, o) {
 }
 
 /** The shared number styles: currency | delimited | precision | percentage. */
-export function formatNumber(bundle, locale, style, value, options = {}) {
+export function formatNumber(bundle, locale, style, value, options = {}, report = () => {}) {
   switch (style) {
     case 'delimited':
       return formatDelimited(value, numberOptions(bundle, locale, null, options));
@@ -288,14 +362,8 @@ export function formatNumber(bundle, locale, style, value, options = {}) {
       const o = numberOptions(bundle, locale, 'percentage', options);
       return o.format.replace('%n', formatRounded(value, o));
     }
-    case 'currency': {
-      const o = numberOptions(bundle, locale, 'currency', options);
-      const d = parseDecimal(value);
-      const rounded = formatRounded(abs(d), o);
-      const zero = /^[^1-9]*$/.test(rounded);
-      const format = d.neg && !zero ? o.negative_format : o.format;
-      return format.replace('%n', rounded).replace('%u', o.unit);
-    }
+    case 'currency':
+      return formatCurrency(bundle, locale, value, options, report);
     default:
       throw new Error(`formatNumber: unknown style ${style}`);
   }
@@ -355,8 +423,8 @@ export function createI18n({ bundle, locale, reporter, lazy } = {}) {
     locale: current,
     t: (key, options = {}) => translate(bundle, current, key, { lazy, ...options }, report),
     l: (value, options = {}) => localize(bundle, current, value, options, report),
-    formatNumber: (style, value, options) => formatNumber(bundle, current, style, value, options),
-    numberOptions: (namespace, options) => numberOptions(bundle, current, namespace, options),
+    formatNumber: (style, value, options) => formatNumber(bundle, current, style, value, options, report),
+    numberOptions: (namespace, options) => numberOptions(bundle, current, namespace, options, report),
     pluralize: (count, singular, plural) => pluralizeWord(bundle, current, count, singular, plural),
     exists: (key, options = {}) => resolve(bundle, current, key, { lazy, ...options }).found,
     /** The raw value of a key through the run-time chain (a hash, an array, a string), or undefined. */

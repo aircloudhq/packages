@@ -1,6 +1,6 @@
 {
   "name": "@aircloudhq/testing",
-  "version": "1.0.5",
+  "version": "1.2.0",
   "description": "In-memory capability doubles for Air-Cloud JavaScript functions, generated from the aircloud:capability WIT contract, plus the fetch-event harness for node:test unit tests.",
   "keywords": [
     "aircloud",
@@ -32,6 +32,10 @@
       "default": "./index.js"
     },
     "./register": "./register.js",
+    "./system": {
+      "types": "./system.d.ts",
+      "default": "./system.js"
+    },
     "./capability/*": {
       "types": "./generated/bindings/*.d.ts",
       "default": "./generated/bindings/*.js"
@@ -44,6 +48,8 @@
     "index.d.ts",
     "register.js",
     "hooks.js",
+    "system.js",
+    "system.d.ts",
     "src/",
     "generated/",
     "README.md",

@@ -27,11 +27,29 @@ export function createQuotaState(world) {
     }
   }
 
+  // The posture a pool takes when the test names none: hard_block where the registry allows it, else the
+  // meter's one declared policy (a RELEASE meter — a delete — is allow_overage only, ADR-263). A policy
+  // the registry does not declare for the meter is refused, as the plan catalog refuses it: a release is
+  // priced, never capped.
+  function resolvePolicy(meter, policy) {
+    const declared = world.contract.meterPolicies[meter];
+    const p = policy ?? (declared.includes("hard_block") ? "hard_block" : declared[0]);
+    if (!POLICIES.includes(p)) throw new DoubleMisuseError(`quota: policy must be one of ${POLICIES.join(", ")}`);
+    if (!declared.includes(p)) {
+      throw new DoubleMisuseError(`quota: '${meter}' declares only ${declared.join(", ")}; a plan cannot give it ${p}`);
+    }
+    return p;
+  }
+
   /** The outcome of charging `units` against `meter`, WITHOUT mutating. */
   function judge(meter, units) {
     const p = pools.get(meter);
     if (!p) return { allowed: true, remaining: undefined };
-    if (p.unprovisioned) return { allowed: false, reason: "no-level-provisioned", pool: null, p };
+    if (p.unprovisioned) {
+      // ADR-263 decision 7: a RELEASE is never refused by quota — with no pool anywhere it is admitted.
+      if (world.contract.releasingMeters.includes(meter) && p.policy === "allow_overage") return { allowed: true, remaining: undefined };
+      return { allowed: false, reason: "no-level-provisioned", pool: null, p };
+    }
     const wouldBe = p.balance - BigInt(units);
     if (wouldBe >= 0n) return { allowed: true, remaining: wouldBe, p };
     if (p.policy === "hard_block") return { allowed: false, reason: "exhausted", pool: p, p };
@@ -47,17 +65,17 @@ export function createQuotaState(world) {
      * Provision a pool for a gated meter. `balance` is the units left; `policy` is the plan's
      * failure posture; `limit` is the entitlement the refusal reports (defaults to `balance`).
      */
-    set(meter, { balance, limit, policy = "hard_block", grain = "/", retryAfterSeconds = 0 } = {}) {
+    set(meter, { balance, limit, policy, grain = "/", retryAfterSeconds = 0 } = {}) {
       requireGated(meter);
       if (typeof balance !== "bigint" && !Number.isInteger(balance)) throw new DoubleMisuseError("quota.set: balance must be an integer or bigint");
-      if (!POLICIES.includes(policy)) throw new DoubleMisuseError(`quota.set: policy must be one of ${POLICIES.join(", ")}`);
+      const p = resolvePolicy(meter, policy);
       const lim = limit === undefined ? Number(balance) : limit;
-      pools.set(meter, { balance: BigInt(balance), limit: lim, policy, grain, retryAfterSeconds });
+      pools.set(meter, { balance: BigInt(balance), limit: lim, policy: p, grain, retryAfterSeconds });
     },
     /** No level of the org chain resolves a pool for this meter (the `no-level-provisioned` refusal). */
-    unprovisioned(meter, { limit = 0, policy = "hard_block", grain = "/", retryAfterSeconds = 0 } = {}) {
+    unprovisioned(meter, { limit = 0, policy, grain = "/", retryAfterSeconds = 0 } = {}) {
       requireGated(meter);
-      pools.set(meter, { unprovisioned: true, limit, policy, grain, retryAfterSeconds });
+      pools.set(meter, { unprovisioned: true, limit, policy: resolvePolicy(meter, policy), grain, retryAfterSeconds });
     },
     balance(meter) {
       const p = pools.get(meter);

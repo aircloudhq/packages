@@ -30,8 +30,22 @@ export function modelName(resource, options = {}) {
   };
 }
 
-/** Model.human_attribute_name(:field) */
+/**
+ * Model.human_attribute_name(:field), and human_attribute_name("field.value") for an enum value (ADR-258
+ * decision 7): the nested key `activemodel.attributes.<entity>/<field>.<value>`, else the value's
+ * projection display_name (the default-locale label), else the value itself — a value the projection
+ * does not know renders as itself.
+ */
 export function humanAttributeName(resource, field, options = {}) {
+  const dot = field.indexOf('.');
+  if (dot >= 0) {
+    const name = field.slice(0, dot);
+    const value = field.slice(dot + 1);
+    const f = fieldOf(resource, name);
+    const v = i18nFor(options)?.lookupDeclared(`activemodel.attributes.${resource.entity}/${name}.${value}`);
+    if (typeof v === 'string') return v;
+    return f.enum?.values?.find((x) => x.value === value)?.display_name ?? value;
+  }
   const f = fieldOf(resource, field);
   const v = i18nFor(options)?.lookupDeclared(`activemodel.attributes.${resource.entity}.${field}`);
   return typeof v === 'string' ? v : f.display_name;

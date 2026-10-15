@@ -8,7 +8,7 @@
 // through these functions (test/flex-contract.test.mjs), so the mirror is checked, not trusted.
 import { CapabilityFailure } from "../errors.js";
 
-export const FIELD_TYPES = ["text", "integer", "decimal", "boolean", "datetime", "date", "json", "relation", "file", "vector"];
+export const FIELD_TYPES = ["text", "integer", "decimal", "boolean", "datetime", "date", "json", "relation", "file", "vector", "enum"];
 export const SLUG_RE = /^[a-z][a-z0-9_]{0,62}$/;
 export const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DECIMAL_RE = /^-?[0-9]+(\.[0-9]+)?$/;
@@ -18,6 +18,9 @@ const INTEGER_MAX_ABS = 9007199254740991;
 const VECTOR_DIMS_MIN = 1;
 const VECTOR_DIMS_MAX = 2000;
 const MASKING_STRATEGIES = ["null", "redact", "hash", "fake_by_type"];
+/** ADR-258 decision 1 (D48): live values ≤ in_max_values; live and removed together ≤ 256. */
+export const ENUM_LIVE_VALUES_MAX = 64;
+export const ENUM_DECLARED_VALUES_MAX = 256;
 
 /** A flex.validation refusal; `field` makes it field-scoped (details.fields.<field>). */
 export function validation(message, field) {
@@ -54,8 +57,48 @@ export function parseConfig(type, config) {
     if (d < VECTOR_DIMS_MIN || d > VECTOR_DIMS_MAX) throw validation(`dims ${d} out of range ${VECTOR_DIMS_MIN}..=${VECTOR_DIMS_MAX}`);
     return { dims: d };
   }
+  if (type === "enum") return parseEnumConfig(config, keys);
   if (keys.length > 0) throw validation(`${type} takes no config keys`);
   return {};
+}
+
+// ADR-258 decision 1 (flex/src/types.rs parse_enum_config). `value_display_names` is presentation and
+// never reaches Flex, so it is refused like any other unknown key.
+function parseEnumConfig(config, keys) {
+  for (const k of keys) if (k !== "values" && k !== "removed_values") throw validation(`unknown enum config key '${k}'`);
+  const list = (key, required) => {
+    const v = config[key];
+    if (v === undefined || v === null) {
+      if (required) throw validation(`enum config requires '${key}'`);
+      return [];
+    }
+    if (!Array.isArray(v)) throw validation(`enum config '${key}' must be an array of values`);
+    return v.map((x) => {
+      if (typeof x !== "string" || !SLUG_RE.test(x)) {
+        throw validation(`enum value ${JSON.stringify(x)} is not a flex_name (grammar ^[a-z][a-z0-9_]{0,62}$)`);
+      }
+      return x;
+    });
+  };
+  const values = list("values", true);
+  const removedValues = list("removed_values", false);
+  if (values.length === 0) throw validation("enum config 'values' must declare at least one live value");
+  if (values.length > ENUM_LIVE_VALUES_MAX) throw validation(`enum declares ${values.length} live values, max ${ENUM_LIVE_VALUES_MAX}`);
+  const total = values.length + removedValues.length;
+  if (total > ENUM_DECLARED_VALUES_MAX) {
+    throw validation(`enum declares ${total} values, max ${ENUM_DECLARED_VALUES_MAX} live and removed together`);
+  }
+  const seen = new Set();
+  for (const v of [...values, ...removedValues]) {
+    if (seen.has(v)) throw validation(`enum value '${v}' is declared more than once across values and removed_values`);
+    seen.add(v);
+  }
+  return { values, removedValues };
+}
+
+/** An enum's declared order — live values, then removed values (ADR-258 decision 3). */
+export function enumDeclaredOrder(field) {
+  return [...field.parsed.values, ...field.parsed.removedValues];
 }
 
 function validateMasking(m) {
@@ -89,7 +132,7 @@ export function validateValue(field, v) {
       }
       return;
     case "decimal": {
-      if (typeof v !== "string") throw validation(`decimal must be a JSON string, got ${jsonKind(v)}`);
+      if (typeof v !== "string") throw validation(`decimal must be a string such as "79.90", got ${jsonKind(v)}`);
       if (!DECIMAL_RE.test(v)) throw validation(`decimal '${v}' is malformed (grammar ^-?[0-9]+(\\.[0-9]+)?$, no exponent)`);
       const digits = (v.match(/[0-9]/g) || []).length;
       if (digits > DECIMAL_MAX_DIGITS) throw validation(`decimal has ${digits} digits, exceeds max ${DECIMAL_MAX_DIGITS}`);
@@ -115,6 +158,16 @@ export function validateValue(field, v) {
     case "file":
       validateFile(v);
       return;
+    case "enum": {
+      // The WRITE rule (ADR-258 decision 2): a live value only.
+      if (typeof v !== "string") throw typeError("enum", v);
+      const { values, removedValues } = field.parsed;
+      if (values.includes(v)) return;
+      if (removedValues.includes(v)) {
+        throw validation(`enum value '${v}' is removed and can no longer be written (live values: ${values.join(", ")})`);
+      }
+      throw validation(`'${v}' is not a value of this enum (live values: ${values.join(", ")})`);
+    }
     case "vector": {
       if (!Array.isArray(v)) throw typeError("vector (array of numbers)", v);
       if (v.length !== field.parsed.dims) throw validation(`vector length ${v.length} != declared dims ${field.parsed.dims}`);
@@ -126,6 +179,52 @@ export function validateValue(field, v) {
     default:
       throw new Error(`@aircloudhq/testing: unknown flex type '${field.type}'`);
   }
+}
+
+// ── field defaults (ADR-259; flex/src/types.rs FieldDefault / validate_default) ─────────────
+/** The closed generator set (types.json `default_generators`): name → the one type it produces. */
+export const DEFAULT_GENERATORS = { now: "datetime", today: "date" };
+/** The types that take no default (types.json `default_refused_types`). */
+export const DEFAULT_REFUSED_TYPES = ["relation", "file", "vector"];
+
+/** Parse the tagged form: an object carrying exactly one of `value` or `generator`. */
+export function parseDefault(v) {
+  const shape = () => validation('a default is {"value": <literal>} or {"generator": <name>}, exactly one of them');
+  if (v === null || typeof v !== "object" || Array.isArray(v)) throw shape();
+  const keys = Object.keys(v);
+  if (keys.length !== 1) throw shape();
+  if (keys[0] === "value") return { value: v.value };
+  if (keys[0] !== "generator" || typeof v.generator !== "string") throw shape();
+  if (!(v.generator in DEFAULT_GENERATORS)) throw validation(`unknown default generator '${v.generator}' (the closed set: now, today)`);
+  return { generator: v.generator };
+}
+
+/**
+ * Judge a default against the field it is declared on and return it canonical: a refused type takes
+ * none, a generator produces exactly its own type, a literal is what a write accepts (an enum's: a LIVE
+ * value), canonicalized as a write is, and never null. The owner-field refusal is the caller's.
+ */
+export function validateDefault(field, d) {
+  if (DEFAULT_REFUSED_TYPES.includes(field.type)) throw validation(`a ${field.type} field takes no default (ADR-259 decision 2)`);
+  if ("generator" in d) {
+    const t = DEFAULT_GENERATORS[d.generator];
+    if (t !== field.type) throw validation(`the '${d.generator}' default generator produces a ${t}, not a ${field.type}`);
+    return { generator: d.generator };
+  }
+  if (d.value === null) throw validation("a default value cannot be null (a field with no default declares none)");
+  validateValue(field, d.value);
+  return { value: canonicalize(field, d.value) };
+}
+
+/**
+ * A FILTER operand (flex/src/types.rs validate_operand): what the type takes on write, except an enum,
+ * whose operand is any DECLARED value — live or removed — so rows holding a removed value stay findable
+ * (ADR-258 decision 3).
+ */
+export function validateOperand(field, v) {
+  if (field.type !== "enum") return validateValue(field, v);
+  if (typeof v !== "string") throw typeError("enum", v);
+  if (!enumDeclaredOrder(field).includes(v)) throw validation(`'${v}' is not a declared value of this enum`);
 }
 
 function validateFile(v) {

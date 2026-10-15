@@ -1,9 +1,10 @@
 // I18nProvider: negotiates the page's locale (spec S4 § Locale negotiation — the `locale` parameter,
 // the #632 preference hook, navigator.languages by RFC 4647 lookup, the default), binds the i18n
 // instance the helpers render with, and wires the run-time missing-key reporter to
-// POST /_air/i18n-missing (bounded per key per page load).
+// POST /_air/i18n-missing (bounded per key per page load) — or, with no release, the dev reporter's console
+// warning (a missing key is never silently humanized).
 import { createContext, createElement as h, useContext, useMemo } from 'react';
-import { createI18n, createMissingReporter, negotiateLocale } from '../i18n/index.js';
+import { createDevReporter, createI18n, createMissingReporter, negotiateLocale } from '../i18n/index.js';
 import { setCurrentI18n } from '../i18n/current.js';
 
 const I18nContext = createContext(null);
@@ -23,7 +24,9 @@ export function I18nProvider({ bundle, release, locale, url, languages, preferre
         defaultLocale: bundle.default_locale,
         preferred,
       });
-    const report = reporter ?? (release ? createMissingReporter({ release, locale: chosen }) : undefined);
+    // A release reports to the product host; with none (a dev server, a preview) the console warns — a
+    // missing key or format is never silently humanized (#664 item 28).
+    const report = reporter ?? (release ? createMissingReporter({ release, locale: chosen }) : createDevReporter({ locale: chosen }));
     const instance = createI18n({ bundle, locale: chosen, reporter: report });
     setCurrentI18n(instance);
     return instance;

@@ -2,8 +2,8 @@
 // locale bundle's `number.*` keys: the same option names (camelCase accepted as well), the same
 // defaults, BigDecimal half-up rounding. Without a bound i18n instance the Rails defaults apply.
 import { i18nFor } from '../i18n/current.js';
-import { NUMBER_DEFAULTS, formatDelimited, formatRounded } from '../i18n/index.js';
-import { abs, parseDecimal } from '../i18n/decimal.js';
+import { NUMBER_DEFAULTS, formatDelimited, formatRounded, moneyValue, renderCurrency } from '../i18n/index.js';
+import { parseDecimal } from '../i18n/decimal.js';
 
 const SNAKE = {
   stripInsignificantZeros: 'strip_insignificant_zeros',
@@ -30,13 +30,15 @@ function lookup(options, key) {
   return i18nFor(options)?.lookup(key);
 }
 
-/** number_to_currency(1234567890.50) # => "$1,234,567,890.50" */
+/**
+ * number_to_currency(1234567890.50) # => "$1,234,567,890.50" — a plain number in the product currency,
+ * a monetary value `{amount: "79.90", currency: "USD"}` in its own (ADR-255 decision 8).
+ */
 export function numberToCurrency(number, options = {}) {
-  const o = optionsFor('currency', options);
-  const d = parseDecimal(number);
-  const rounded = formatRounded(abs(d), o);
-  const format = d.neg && /[1-9]/.test(rounded) ? o.negative_format : o.format;
-  return format.replace('%n', rounded).replace('%u', o.unit);
+  const i = i18nFor(options);
+  if (i) return i.formatNumber('currency', number, snake(options));
+  const money = moneyValue(number);
+  return renderCurrency(parseDecimal(money ? money.amount : number), optionsFor('currency', options));
 }
 
 /** number_with_delimiter(12345678) # => "12,345,678" */

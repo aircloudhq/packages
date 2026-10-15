@@ -100,10 +100,22 @@ export function fullMessage(resource, field, message, options = {}) {
 /**
  * createForm(resource, {record, i18n}) — the form model of one resource: a new record, or the edit of
  * `record` ({id, data}).
+ *
+ * A new record starts each field at its projected literal default (ADR-259 decision 9); a generator
+ * default has no value until Flex evaluates it, so its field starts empty. An edit starts from the stored
+ * values, never the default. On create, a defaulted field the user did not touch is omitted from the
+ * payload (Flex fills the default in force for the record's subtree) and passes the client-side
+ * required check; a defaulted field the user cleared is sent as null, so the default does not return.
  */
 export function createForm(resource, options = {}) {
   const i18n = () => i18nFor(options);
-  const initial = Object.fromEntries(resource.fields.map((f) => [f.name, toInput(f.type, options.record?.data?.[f.name])]));
+  const start = (f) => {
+    if (options.record) return options.record.data?.[f.name];
+    return f.default && 'value' in f.default ? f.default.value : undefined;
+  };
+  const initial = Object.fromEntries(resource.fields.map((f) => [f.name, toInput(f.type, start(f))]));
+  // A defaulted field the user has not touched, on a new record: Flex applies its default.
+  const defaulted = (f) => model.id === undefined && Boolean(f.default) && !state.touched[f.name];
   let state = {
     values: { ...initial },
     initial: { ...initial },
@@ -147,19 +159,24 @@ export function createForm(resource, options = {}) {
     validate() {
       const errors = {};
       for (const f of resource.fields) {
+        if (defaulted(f)) continue;
         const kind = validationKind(f, state.values[f.name]);
         if (kind) errors[f.name] = [errorMessage(resource, f.name, kind, { i18n: i18n() })];
       }
       setState({ errors });
       return Object.keys(errors).length === 0;
     },
-    /** The JSON body of the submit: set fields; on an update a cleared field is null. */
+    /**
+     * The JSON body of the submit: set fields; on an update a cleared field is null. On a create an
+     * untouched defaulted field is omitted and a cleared one is null.
+     */
     payload() {
       const data = {};
       for (const f of resource.fields) {
+        if (defaulted(f)) continue;
         const v = toValue(f.type, state.values[f.name]);
         if (v !== undefined) data[f.name] = v;
-        else if (model.id !== undefined) data[f.name] = null;
+        else if (model.id !== undefined || f.default) data[f.name] = null;
       }
       return data;
     },

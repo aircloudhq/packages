@@ -1841,9 +1841,11 @@ export const CONTRACT = deepFreeze({
     "functions.guest_server_error",
     "functions.instantiation_failed",
     "functions.internal",
+    "functions.invoke_outcome_unknown",
     "functions.locale_bundle_unresolvable",
     "functions.memory_exceeded",
     "functions.not_found",
+    "functions.payload_too_large",
     "functions.quota_exhausted",
     "functions.resolver_unavailable",
     "functions.sandbox_denied",
@@ -1874,6 +1876,75 @@ export const CONTRACT = deepFreeze({
     "flex.record.update",
     "functions.invoke"
   ],
+  "meterPolicies": {
+    "comms.mail.send": [
+      "hard_block"
+    ],
+    "comms.whatsapp.send": [
+      "hard_block"
+    ],
+    "deploy.app.deploy": [
+      "hard_block"
+    ],
+    "deploy.database.create": [
+      "hard_block"
+    ],
+    "deploy.database.fork": [
+      "hard_block"
+    ],
+    "deploy.site.egress_bytes": [
+      "hard_block",
+      "allow_overage",
+      "warn_upgrade"
+    ],
+    "flex.entity.create": [
+      "hard_block"
+    ],
+    "flex.entity.delete": [
+      "allow_overage"
+    ],
+    "flex.entity.update": [
+      "hard_block"
+    ],
+    "flex.environment.create": [
+      "hard_block"
+    ],
+    "flex.environment.delete": [
+      "allow_overage"
+    ],
+    "flex.field.create": [
+      "hard_block"
+    ],
+    "flex.field.delete": [
+      "allow_overage"
+    ],
+    "flex.field.update": [
+      "hard_block"
+    ],
+    "flex.query": [
+      "hard_block"
+    ],
+    "flex.record.create": [
+      "hard_block",
+      "warn_upgrade",
+      "allow_overage"
+    ],
+    "flex.record.delete": [
+      "allow_overage"
+    ],
+    "flex.record.update": [
+      "hard_block"
+    ],
+    "functions.invoke": [
+      "hard_block"
+    ]
+  },
+  "releasingMeters": [
+    "flex.entity.delete",
+    "flex.environment.delete",
+    "flex.field.delete",
+    "flex.record.delete"
+  ],
   "hmacKeyEncodings": {
     "values": [
       "text",
@@ -1886,6 +1957,10 @@ export const CONTRACT = deepFreeze({
   "correlation": {
     "header": "x-correlation-id",
     "mintedVersion": 4
+  },
+  "flexQueryLimit": {
+    "minimum": 1,
+    "maximum": 200
   }
 });
 

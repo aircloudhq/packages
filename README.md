@@ -2,6 +2,7 @@
 
 The npm packages of the Air-Cloud platform, as published on npmjs.
 
+- [`@aircloudhq/cli`](aircloud-cli/) — The aircloud CLI: create, check and release products on Air-Cloud. Installs the signed native binary for your platform.
 - [`@aircloudhq/testing`](aircloud-testing/) — In-memory capability doubles for Air-Cloud JavaScript functions, generated from the aircloud:capability WIT contract, plus the fetch-event harness for node:test unit tests.
 - [`@aircloudhq/web`](aircloud-web/) — The application package of an Air-Cloud product: the Rails Action View helpers, i18n over the product's locale bundle, resource pages over its models, and React bindings, for its site and its JavaScript functions.
 

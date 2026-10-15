@@ -9,12 +9,27 @@
 //
 // One environment's data per world: the double stands in for the environment the function under
 // test runs in (ADR-111 isolates environments by data, and a unit test runs in one).
+//
+// WHO ACTS, AND WHERE (ADR-257). Every call resolves its acting principal through the one resolution
+// (./acting.js): the bearer the function's Flex calls carry — `world.flex.bearer`, the function runtime's
+// service account at `/` unless a test sets another — and, for an invocation serving a signed-in end user
+// (`world.principal.signIn`), the host's end-user assertion. The session runs at the acting end user's node
+// (decision 7), else the bearer's. Records are stored at the session's node; a session reads its node and
+// below, plus the rows of a `shared` entity stored at a strict ancestor (SELECT only). An entity declaring
+// `owner` scopes an acting end user without a bypass role to the records it owns (decision 4): create forces
+// the owner to its sub, changing the owner is flex.forbidden, another's record is flex.not_found. An edge
+// is visible when its source's row is, and, to an acting end user, only when both endpoints are. The
+// behaviour is the shared vectors' (contracts/flex/v1/{owner-policy,org-scope,acting-principal}-vectors.json,
+// test/flex_owner_vectors.test.mjs).
 import { CapabilityFailure, DoubleMisuseError } from "../errors.js";
 import { admit } from "./quota.js";
 import {
-  canonicalize, FIELD_TYPES, ID_RE, jsonbForm, parseConfig, SLUG_RE, validateValue, validation,
+  canonicalize, FIELD_TYPES, formatDatetimeMicros, ID_RE, jsonbForm, parseConfig, parseDefault, SLUG_RE,
+  validateDefault, validateValue, validation,
 } from "./flex-values.js";
+import { dateAt, parseZone, ZONE_NAME_RE } from "./flex-zone.js";
 import { parseQuery, runQuery } from "./flex-query.js";
+import { atOrBelow, resolveActingPrincipal } from "./acting.js";
 
 const MAX_BODY = 256 * 1024;
 const RESERVED_ENTITY_PREFIX = "sys_";
@@ -36,6 +51,22 @@ export const FLEX_METERS = {
 function notFound(message) {
   return new CapabilityFailure("flex.not_found", message, {});
 }
+
+function forbidden(message) {
+  return new CapabilityFailure("flex.forbidden", message, {});
+}
+
+function unauthenticated(message) {
+  return new CapabilityFailure("flex.unauthenticated", message, {});
+}
+
+/** `node` is a strict ancestor of `of`. */
+function strictAncestor(node, of) {
+  return node !== of && atOrBelow(of, node);
+}
+
+/** The bearer a function's Flex calls carry: the function runtime's service account at the root (ADR-242). */
+export const RUNTIME_BEARER = Object.freeze({ plane: "service", sub: "function-runtime", roles: null, org_path: "/" });
 
 function nameConflict() {
   return new CapabilityFailure("flex.name_conflict", "a live record with that name already exists", {});
@@ -74,17 +105,68 @@ function parseNewField(v) {
   const config = "config" in v ? v.config : {};
   const parsed = parseConfig(v.type, config);
   const required = typeof v.required === "boolean" ? v.required : false;
-  return { name: v.name, displayName, type: v.type, config, parsed, required };
+  // ADR-259 decision 3: the tagged default, judged against the field it is declared on.
+  const dflt = "default" in v ? scopedTo("default", () => validateDefault({ type: v.type, parsed }, parseDefault(v.default))) : null;
+  return { name: v.name, displayName, type: v.type, config, parsed, required, default: dflt };
 }
 
+/** Run `fn`, scoping a flex.validation refusal to `field` (details.fields.<field>). */
+function scopedTo(field, fn) {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof CapabilityFailure && e.code === "flex.validation") throw validation(e.detail, field);
+    throw e;
+  }
+}
+
+/** The I5 field doc; `default` only when the field has one (ADR-259 decision 3). */
 function fieldDoc(f) {
-  return { id: f.id, name: f.name, display_name: f.displayName, type: f.type, config: f.config, required: f.required };
+  const doc = { id: f.id, name: f.name, display_name: f.displayName, type: f.type, config: f.config, required: f.required };
+  if (f.default) doc.default = f.default;
+  return doc;
 }
 
 export function createFlexState(world) {
   let tx = 0;
+  let zone = null; // the declared product time zone {name, rules} (ADR-259), set by declare()
   const entities = new Map(); // live entities by name
-  const records = new Map(); // tenant-wide live records by id: { id, entityId, data }
+  const records = new Map(); // tenant-wide live records by id: { id, entityId, data, orgPath, key }
+
+  /** The request's session: its node and, when one acts, the end user (ADR-257 decisions 2, 7). */
+  function session() {
+    const p = world.principal.current();
+    const assertion = p ? { sub: p.sub, roles: p.roles, org_path: p.orgPath, act: p.act ?? null } : null;
+    const acting = resolveActingPrincipal(state.bearer, assertion);
+    if (acting.acting === "end_user" && acting.source === "assertion" && !atOrBelow(acting.org_path, state.bearer.org_path)) {
+      throw unauthenticated("end-user assertion: org_path is outside the bearer's node");
+    }
+    return { node: acting.org_path, endUser: acting.acting === "end_user" ? { sub: acting.sub, roles: acting.roles } : null };
+  }
+  /** The end user this entity's owner policy scopes in session `s`, or null (no owner, tenant, bypass). */
+  function ownerScope(e, s) {
+    if (!e.owner || !s.endUser) return null;
+    if (s.endUser.roles.some((r) => e.ownerBypassRoles.includes(r))) return null;
+    return s.endUser.sub;
+  }
+  function ownerAdmits(e, r, s) {
+    const sub = ownerScope(e, s);
+    return sub === null || r.data[e.owner] === sub;
+  }
+  /** A row `s` reads: its node and below, a shared entity's strict-ancestor rows, the owner policy. */
+  function readable(r, s) {
+    const e = entityById(r.entityId);
+    const placed = atOrBelow(r.orgPath, s.node) || (e.shared && strictAncestor(r.orgPath, s.node));
+    return placed && ownerAdmits(e, r, s);
+  }
+  /** A row `s` writes: its node and below only (a shared ancestor row stays read-only), the owner policy. */
+  function writable(r, s) {
+    return atOrBelow(r.orgPath, s.node) && ownerAdmits(entityById(r.entityId), r, s);
+  }
+  function entityById(id) {
+    for (const e of entities.values()) if (e.id === id) return e;
+    throw new Error(`@aircloudhq/testing defect: no entity ${id}`);
+  }
 
   function liveFields(e) {
     return e.fields.filter((f) => !f.deleted).sort((a, b) => a.tx - b.tx || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -92,13 +174,14 @@ export function createFlexState(world) {
   function entityDoc(e) {
     return { id: e.id, name: e.name, display_name: e.displayName, fields: liveFields(e).map(fieldDoc) };
   }
-  function resolveEntity(name) {
+  /** The base layer at `/` resolves at every node; an overlay only at its own node (decision 7). */
+  function resolveEntity(name, s = session()) {
     const e = entities.get(name);
-    if (!e) throw notFound(`entity '${name}' not found`);
+    if (!e || (e.orgPath !== "/" && e.orgPath !== s.node)) throw notFound(`entity '${name}' not found`);
     return e;
   }
-  function recordsOf(e) {
-    return [...records.values()].filter((r) => r.entityId === e.id);
+  function recordsOf(e, s) {
+    return [...records.values()].filter((r) => r.entityId === e.id && (s === undefined || readable(r, s)));
   }
   function serializeRecord(e, r) {
     const fields = liveFields(e);
@@ -109,13 +192,30 @@ export function createFlexState(world) {
     }
     return { id: r.id, data: out };
   }
+  // One written field value, validated and canonicalized; a refusal is scoped to the field
+  // (details.fields.<field>), as flex-jit's write_value does (#664 item 19).
+  function writeValue(f, v) {
+    try {
+      validateValue(f, v);
+      return canonicalize(f, v);
+    } catch (e) {
+      if (e instanceof CapabilityFailure && e.code === "flex.validation" && !e.details.fields) throw validation(e.detail, f.name);
+      throw e;
+    }
+  }
+  // ADR-259 decision 4 (ast.rs validate_record_create): an ABSENT field takes its default before the
+  // required check — a literal filled and judged as a write, a generator queued for the insert; an
+  // explicit null never takes one.
   function validateCreate(fields, data) {
     if (!isObj(data)) throw validation("record 'data' must be a JSON object");
     for (const name of Object.keys(data)) if (!fields.some((f) => f.name === name)) throw validation(`unknown field '${name}'`, name);
     const out = {};
+    const generated = [];
     for (const f of fields) {
       if (!(f.name in data)) {
-        if (f.required) throw validation(`required field '${f.name}' is missing`, f.name);
+        if (f.default && "value" in f.default) out[f.name] = writeValue(f, f.default.value);
+        else if (f.default) generated.push([f.name, f.default.generator]);
+        else if (f.required) throw validation(`required field '${f.name}' is missing`, f.name);
         continue;
       }
       const v = data[f.name];
@@ -123,10 +223,28 @@ export function createFlexState(world) {
         if (f.required) throw validation(`required field '${f.name}' must not be null`, f.name);
         continue;
       }
-      validateValue(f, v);
-      out[f.name] = canonicalize(f, v);
+      out[f.name] = writeValue(f, v);
     }
-    return out;
+    return { data: out, generated };
+  }
+  /**
+   * Fill a create's generated defaults at ONE instant (exec.rs fill_generated): `now` is the world
+   * clock's instant in canonical UTC, `today` its date in the declared product time zone; an environment
+   * no declaration has converged has no zone, and a `today` default there refuses the create.
+   */
+  function fillGenerated(data, generated) {
+    const ms = world.clock.nowMs();
+    for (const [name, g] of generated) {
+      if (g === "now") {
+        data[name] = formatDatetimeMicros(BigInt(ms) * 1000n);
+      } else {
+        if (!zone) {
+          throw validation("the 'today' default needs the product time zone, which PUT /v1/schema declares; this environment has no declaration", name);
+        }
+        data[name] = dateAt(zone.rules, Math.floor(ms / 1000));
+      }
+    }
+    return data;
   }
   function validatePatch(fields, data) {
     if (!isObj(data)) throw validation("PATCH 'data' must be a JSON object");
@@ -139,17 +257,16 @@ export function createFlexState(world) {
         if (f.required) throw validation(`cannot clear required field '${name}' (null on a required field)`, name);
         clear.push(name);
       } else {
-        validateValue(f, v);
-        set[name] = canonicalize(f, v);
+        set[name] = writeValue(f, v);
       }
     }
     return { set, clear };
   }
-  function checkRelationTargets(e, data) {
+  function checkRelationTargets(e, data, s) {
     for (const f of liveFields(e)) {
       if (f.type !== "relation" || !(f.name in data)) continue;
       const target = records.get(data[f.name]);
-      if (!target) throw validation("relation target record is not visible", f.name);
+      if (!target || !readable(target, s)) throw validation("relation target record is not visible", f.name);
       if (target.entityId !== f.parsed.targetEntityId) {
         throw validation("relation target belongs to a different entity than config.target_entity_id", f.name);
       }
@@ -168,31 +285,110 @@ export function createFlexState(world) {
     return specs.map((s) => ({ ...s, id: world.newId(), tx, deleted: false }));
   }
 
+  /**
+   * A declared field's default, judged against the field as DECLARED (an enum's against its declared live
+   * values), canonical; null when it declares none. A refusal is scoped to `<entity>.<field>`.
+   */
+  function declaredDefault(f, at) {
+    if (f.default === undefined || f.default === null) return null;
+    const parsed = f.type === "enum" ? parseConfig("enum", enumConfig(f)) : {};
+    return scopedTo(at, () => validateDefault({ type: f.type, parsed }, parseDefault(f.default)));
+  }
+  /** The lists of a declared enum field as its config (`removed_values` absent ≡ none). */
+  function enumConfig(f) {
+    return { values: f.values ?? null, removed_values: f.removed_values ?? [] };
+  }
+  /**
+   * The update ops a declaration makes on the LIVE base layer, or the refusal — decided before any change
+   * (converge.rs `plan`: immutable changes first, then omissions). Each op carries its `apply`.
+   */
+  function planUpdates(declared) {
+    const immutable = [];
+    const omitted = [];
+    const ops = [];
+    for (const [name, d] of [...declared].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      const e = entities.get(name);
+      if (!e || d.removed) continue;
+      for (const [n, f] of Object.entries(d.fields ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+        const x = liveFields(e).find((y) => y.name === n);
+        if (!x) continue;
+        if (x.type !== f.type) {
+          immutable.push({ entity: name, field: n, attribute: "type", live: x.type, declared: f.type });
+          continue;
+        }
+        if (f.removed) continue;
+        // ADR-259 decision 5: adding, changing and clearing a default is one `update_default` (after
+        // the field's enum lists, as converge.rs orders them).
+        const wantDefault = declaredDefault(f, `${name}.${n}`);
+        const defaultOp = JSON.stringify(wantDefault) === JSON.stringify(x.default ?? null) ? null : {
+          op: "update_default", entity: name, field: n, apply: () => { x.default = wantDefault; },
+        };
+        if (x.type !== "enum") {
+          if (defaultOp) ops.push(defaultOp);
+          continue;
+        }
+        const want = enumConfig(f);
+        const declaredValues = [...want.values, ...want.removed_values];
+        for (const value of [...x.parsed.values, ...x.parsed.removedValues]) {
+          if (!declaredValues.includes(value)) omitted.push({ entity: name, field: n, value });
+        }
+        const same = JSON.stringify(want.values) === JSON.stringify(x.parsed.values)
+          && JSON.stringify(want.removed_values) === JSON.stringify(x.parsed.removedValues);
+        if (!same) {
+          ops.push({
+            op: "update_enum_values", entity: name, field: n,
+            apply: () => {
+              x.config = { ...x.config, values: want.values, removed_values: want.removed_values };
+              x.parsed = parseConfig("enum", want);
+            },
+          });
+        }
+        if (defaultOp) ops.push(defaultOp);
+      }
+    }
+    const refuse = (code, list, what) => {
+      if (list.length === 0) return;
+      const names = list.map((v) => `${v.entity}.${v.field}${v.value ? ` value '${v.value}'` : ""}`).join(", ");
+      throw new CapabilityFailure(code, `${what}: ${names}`, { ...list[0], violations: list });
+    };
+    refuse("flex.immutable_field", immutable, "the declaration changes an immutable attribute");
+    refuse("flex.schema_omitted_live", omitted,
+      "live base-layer entities or fields are absent from the declaration (removal is an explicit `removed = true`)");
+    return ops;
+  }
+
   const state = {
     // ── the WIT surface (called by the binder) ──────────────────────────────────────────
     query(entityName, queryJson) {
       const body = parseBody(queryJson);
-      const e = resolveEntity(entityName);
-      const q = parseQuery(liveFields(e), body);
+      const s = session();
+      const e = resolveEntity(entityName, s);
+      const q = parseQuery(liveFields(e), body, world.contract.flexQueryLimit);
       admit(world, FLEX_METERS.query, 1, "flex");
-      return JSON.stringify(runQuery(q, recordsOf(e)));
+      return JSON.stringify(runQuery(q, recordsOf(e, s)));
     },
     getRecord(entityName, id) {
       const rid = parseUuid(id);
       if (rid === null) throw notFound("record not found");
-      const e = resolveEntity(entityName);
+      const s = session();
+      const e = resolveEntity(entityName, s);
       const r = records.get(rid);
-      if (!r || r.entityId !== e.id) throw notFound("record not found");
+      if (!r || r.entityId !== e.id || !readable(r, s)) throw notFound("record not found");
       return JSON.stringify(serializeRecord(e, r));
     },
     createRecord(entityName, recordJson) {
       const body = parseBody(recordJson);
-      const e = resolveEntity(entityName);
-      const data = validateCreate(liveFields(e), recordData(body));
+      const s = session();
+      const e = resolveEntity(entityName, s);
+      const created = validateCreate(liveFields(e), recordData(body));
       admit(world, FLEX_METERS.recordCreate, 1, "flex");
-      checkRelationTargets(e, data);
+      const data = fillGenerated(created.data, created.generated);
+      // Decision 4: an owner-scoped end user's create is owned by it, whatever the client sent.
+      const sub = ownerScope(e, s);
+      if (sub !== null) data[e.owner] = sub;
+      checkRelationTargets(e, data, s);
       tx++;
-      const r = { id: world.newId(), entityId: e.id, data: jsonbForm(data) };
+      const r = { id: world.newId(), entityId: e.id, data: jsonbForm(data), orgPath: s.node, key: null };
       records.set(r.id, r);
       return JSON.stringify(serializeRecord(e, r));
     },
@@ -200,16 +396,23 @@ export function createFlexState(world) {
       const body = parseBody(patchJson);
       const rid = parseUuid(id);
       if (rid === null) throw notFound("record not found");
-      const e = resolveEntity(entityName);
+      const s = session();
+      const e = resolveEntity(entityName, s);
       const plan = validatePatch(liveFields(e), recordData(body));
       const r = records.get(rid);
-      if (!r) throw notFound("record not found");
+      if (!r || r.entityId !== e.id || !writable(r, s)) throw notFound("record not found");
+      // Decision 4: an owner-scoped end user cannot hand its record to another (or to none); restating
+      // its own sub is not a change.
+      const sub = ownerScope(e, s);
+      if (sub !== null && (plan.clear.includes(e.owner) || (e.owner in plan.set && plan.set[e.owner] !== sub))) {
+        throw forbidden(`the owner field '${e.owner}' cannot be changed by an owner-scoped end user`);
+      }
       const merged = { ...r.data, ...plan.set };
       for (const k of plan.clear) delete merged[k];
       const stored = jsonbForm(merged);
       // A PATCH that changes nothing is decided BEFORE the wallet (exec.rs patch_record_tx, #645).
       if (JSON.stringify(stored) === JSON.stringify(r.data)) return JSON.stringify(serializeRecord(e, r));
-      checkRelationTargets(e, plan.set);
+      checkRelationTargets(e, plan.set, s);
       admit(world, FLEX_METERS.recordUpdate, 1, "flex");
       tx++;
       r.data = stored;
@@ -218,9 +421,11 @@ export function createFlexState(world) {
     deleteRecord(entityName, id) {
       const rid = parseUuid(id);
       if (rid === null) throw notFound("record not found");
-      resolveEntity(entityName);
+      const s = session();
+      const e = resolveEntity(entityName, s);
       admit(world, FLEX_METERS.recordDelete, 1, "flex");
-      if (!records.has(rid)) throw notFound("record not found");
+      const r = records.get(rid);
+      if (!r || r.entityId !== e.id || !writable(r, s)) throw notFound("record not found");
       tx++;
       records.delete(rid);
       return "{}";
@@ -237,10 +442,13 @@ export function createFlexState(world) {
       const displayName = typeof body.display_name === "string" ? body.display_name : name;
       if (!Array.isArray(body.fields)) throw validation("entity 'fields' array is required");
       const specs = body.fields.map(parseNewField);
+      const s = session();
       admit(world, FLEX_METERS.entityCreate, 1, "flex");
       if (entities.has(name)) throw nameConflict();
       tx++;
-      const e = { id: world.newId(), name, displayName, fields: [] };
+      // An entity created through the API is a layer at the session's node: the base layer at `/`, an
+      // org overlay below it. Owner and shared are base-layer declarations only (declare).
+      const e = { id: world.newId(), name, displayName, fields: [], orgPath: s.node, owner: null, ownerBypassRoles: [], shared: false };
       e.fields = insertFields(e, specs);
       entities.set(name, e);
       // The create response lists fields in REQUEST order (exec.rs create_entity); a later
@@ -248,7 +456,9 @@ export function createFlexState(world) {
       return JSON.stringify({ id: e.id, name, display_name: displayName, fields: e.fields.map(fieldDoc) });
     },
     listEntities() {
+      const s = session();
       const list = [...entities.values()]
+        .filter((e) => e.orgPath === "/" || e.orgPath === s.node)
         .sort((a, b) => Buffer.compare(Buffer.from(a.name), Buffer.from(b.name)))
         .map((e) => ({ id: e.id, name: e.name, display_name: e.displayName }));
       return JSON.stringify({ entities: list });
@@ -281,18 +491,39 @@ export function createFlexState(world) {
       }
       const displayName = typeof body.display_name === "string" ? body.display_name : undefined;
       const required = typeof body.required === "boolean" ? body.required : undefined;
+      for (const k of Object.keys(body)) {
+        if (!["display_name", "required", "default"].includes(k)) throw validation(`unknown key '${k}' in the field patch body`);
+      }
       const e = resolveEntity(entityName);
       const f = liveFields(e).find((x) => x.name === fieldName);
       if (!f) throw notFound(`field '${fieldName}' not found`);
+      // ADR-259 decision 3: null clears the default; a default is judged against the field as it stands,
+      // and the owner field takes none.
+      let dflt;
+      if ("default" in body) {
+        if (body.default === null) {
+          dflt = null;
+        } else {
+          const d = scopedTo("default", () => parseDefault(body.default));
+          if (e.owner === fieldName) throw validation("the owner field takes no default (ADR-259 decision 2)", "default");
+          dflt = scopedTo("default", () => validateDefault(f, d));
+        }
+      }
       // The PATCH response omits display_name (exec.rs patch_field's RETURNING list).
-      const doc = () => JSON.stringify({ id: f.id, name: f.name, type: f.type, config: f.config, required: f.required });
+      const doc = () => {
+        const out = { id: f.id, name: f.name, type: f.type, config: f.config, required: f.required };
+        if (f.default) out.default = f.default;
+        return JSON.stringify(out);
+      };
       // A PATCH that changes nothing is decided BEFORE the wallet (exec.rs patch_field, #645).
       const noop = (displayName === undefined || displayName === f.displayName)
-        && (required === undefined || required === f.required);
+        && (required === undefined || required === f.required)
+        && (dflt === undefined || JSON.stringify(dflt) === JSON.stringify(f.default ?? null));
       if (noop) return doc();
       admit(world, FLEX_METERS.fieldUpdate, 1, "flex");
       if (displayName !== undefined) f.displayName = displayName;
       if (required !== undefined) f.required = required;
+      if (dflt !== undefined) f.default = dflt;
       return doc();
     },
     updateEntity(name, patchJson) {
@@ -327,6 +558,147 @@ export function createFlexState(world) {
     },
 
     // ── the test-author API (never reachable from a guest) ──────────────────────────────
+    /**
+     * The bearer the function's Flex calls carry: the runtime's service account at `/`. A test may set
+     * another ({plane, sub, roles, org_path}) — an `end_user` bearer, or a service account of an org node.
+     */
+    bearer: RUNTIME_BEARER,
+    /**
+     * Converge the base layer as the release's PUT /v1/schema does (ADR-217 D4): `declaration` is
+     * {entities: {<name>: {display_name, owner, owner_bypass_roles, shared, fields: {<field>: {type,
+     * required, display_name, target, dims, values, removed_values, default}}}}, time_zone,
+     * time_zone_rules} — the shape db/schema/*.toml compiles to (the zone and its rules from the release's
+     * locale bundle, required — ADR-259 decision 1, R35). A default converges as one `update_default`. Owner and shared are declared here only (ADR-257 decision 1); an entity not yet live is
+     * created at `/`. An enum's value lists converge as flex/src/converge.rs plans them (ADR-258 decision
+     * 4): adding, reordering, restoring and tombstoning a value is one `update_enum_values`; a value the
+     * environment knows that both declared lists omit is flex.schema_omitted_live naming it; a type change
+     * is flex.immutable_field — every refusal decided before anything changes. Returns {applied} for the
+     * update ops it makes, per entity then per field by name (the create ops a first declaration makes
+     * are not reported).
+     */
+    declare(declaration) {
+      if (!isObj(declaration) || !isObj(declaration.entities)) throw validation("a schema declaration carries 'entities'");
+      const saved = world.quota.suspend();
+      try {
+        const declared = Object.entries(declaration.entities);
+        for (const [name, d] of declared) {
+          if (d.owner_bypass_roles && !d.owner) throw validation(`entity '${name}': owner_bypass_roles is valid only with owner`);
+          if (d.owner && d.shared) throw validation(`entity '${name}': an owned entity cannot be shared`);
+          const fields = Object.entries(d.fields ?? {});
+          if (d.owner) {
+            const f = fields.find(([n]) => n === d.owner);
+            if (!f) throw validation(`entity '${name}': owner '${d.owner}' names no field`);
+            if (f[1].type !== "text") throw validation(`entity '${name}': owner '${d.owner}' is not a text field`);
+          }
+          for (const [n, f] of fields) {
+            const lists = (f.values ?? null) !== null || (f.removed_values ?? null) !== null;
+            if (f.type !== "enum" && lists) throw validation("'values' and 'removed_values' are only legal on an enum", `${name}.${n}`);
+            if (f.type === "enum") {
+              try { parseConfig("enum", enumConfig(f)); } catch (e) { throw validation(e.detail, `${name}.${n}`); }
+            }
+            declaredDefault(f, `${name}.${n}`);
+          }
+        }
+        // ADR-259 decision 1 (R35): the product time zone and its rules, required.
+        if (typeof declaration.time_zone !== "string") {
+          throw validation("the declaration requires 'time_zone', the product time zone (ADR-259)", "time_zone");
+        }
+        if (!ZONE_NAME_RE.test(declaration.time_zone)) {
+          throw validation(`'${declaration.time_zone}' is not a zone name (grammar ^[A-Za-z0-9_+./-]+$)`, "time_zone");
+        }
+        if (declaration.time_zone_rules === undefined || declaration.time_zone_rules === null) {
+          throw validation("the declaration requires 'time_zone_rules', the zone's rules from the release's locale bundle", "time_zone_rules");
+        }
+        const rules = parseZone(declaration.time_zone_rules);
+        // ADR-259 decision 2: the owner field takes no default (converge.rs plan, after parsing).
+        for (const [name, d] of declared) {
+          const f = d.owner ? (d.fields ?? {})[d.owner] : undefined;
+          if (f && f.default !== undefined && f.default !== null) {
+            throw validation("the owner field takes no default (ADR-259 decision 2)", `${name}.${d.owner}`);
+          }
+        }
+        const applied = planUpdates(declared);
+        const spec = (n, f) => ({
+          name: n, type: f.type, required: f.required ?? false, ...(f.display_name ? { display_name: f.display_name } : {}),
+          config: f.type === "relation" ? { target_entity_id: entities.get(f.target)?.id ?? null }
+            : f.type === "vector" ? { dims: f.dims }
+            : f.type === "enum" ? enumConfig(f) : {},
+          ...(f.default === undefined || f.default === null ? {} : { default: f.default }),
+        });
+        // Entities first (a relation names its target by entity), then their relation fields.
+        for (const [name, d] of declared) {
+          let e = entities.get(name);
+          if (!e) {
+            const plain = Object.entries(d.fields ?? {}).filter(([, f]) => f.type !== "relation").map(([n, f]) => spec(n, f));
+            state.createEntity(JSON.stringify({ name, ...(d.display_name ? { display_name: d.display_name } : {}), fields: plain }));
+            e = entities.get(name);
+            e.orgPath = "/";
+          }
+          e.owner = d.owner ?? null;
+          e.ownerBypassRoles = [...(d.owner_bypass_roles ?? [])];
+          e.shared = d.shared === true;
+        }
+        for (const [name, d] of declared) {
+          const e = entities.get(name);
+          for (const [n, f] of Object.entries(d.fields ?? {})) {
+            if (liveFields(e).some((x) => x.name === n)) continue;
+            if (f.type === "relation" && !entities.has(f.target)) throw validation(`relation '${name}.${n}' targets no entity '${f.target}'`, n);
+            state.addField(name, JSON.stringify(spec(n, f)));
+          }
+        }
+        for (const u of applied) u.apply();
+        zone = { name: declaration.time_zone, rules };
+        return { applied: applied.map(({ op, entity, field }) => ({ op, entity, field })) };
+      } finally {
+        world.quota.resume(saved);
+      }
+    },
+    /**
+     * PUT /v1/entities/{entity}/records/by-key/{key} — the seed surface (ADR-217 D6): create or replace the
+     * record holding natural key `key`. An acting end user is refused (flex.forbidden, ADR-257 decision 4).
+     * Returns {created, record}.
+     */
+    upsertByKey(entityName, key, data) {
+      const s = session();
+      if (s.endUser) throw forbidden("the keyed upsert is a seed surface; an acting end user cannot use it");
+      if (typeof key !== "string" || !SLUG_RE.test(key)) throw validation(`'${String(key)}' is not a valid key`, "key");
+      const e = resolveEntity(entityName, s);
+      const existing = [...records.values()].find((r) => r.entityId === e.id && r.key === key && writable(r, s));
+      const saved = world.quota.suspend();
+      try {
+        if (existing) {
+          return { created: false, record: JSON.parse(state.updateRecord(entityName, existing.id, JSON.stringify({ data }))) };
+        }
+        const record = JSON.parse(state.createRecord(entityName, JSON.stringify({ data })));
+        records.get(record.id).key = key;
+        return { created: true, record };
+      } finally {
+        world.quota.resume(saved);
+      }
+    },
+    /**
+     * The relation edges (flex.sys_edges) the current session sees pointing `to` a record or leaving it
+     * (`from`) — the count. An edge lives at its source's node: visible when that row's placement is (the
+     * node and below, or a shared entity's strict ancestor) and, to an acting end user, only when both
+     * endpoints are readable (ADR-257 decisions 4, 7).
+     */
+    edges({ to, from } = {}) {
+      const s = session();
+      let n = 0;
+      for (const src of records.values()) {
+        const e = entityById(src.entityId);
+        const placed = atOrBelow(src.orgPath, s.node) || (e.shared && strictAncestor(src.orgPath, s.node));
+        if (!placed) continue;
+        for (const f of liveFields(e)) {
+          if (f.type !== "relation" || typeof src.data[f.name] !== "string") continue;
+          const dst = records.get(src.data[f.name]);
+          if (!dst || (to !== undefined && dst.id !== to) || (from !== undefined && src.id !== from)) continue;
+          if (s.endUser && !(readable(src, s) && readable(dst, s))) continue;
+          n++;
+        }
+      }
+      return n;
+    },
     /** Declare an entity exactly as create-entity would (same validation); returns its doc. */
     defineEntity(spec) {
       return JSON.parse(state.createEntityUnmetered(spec));

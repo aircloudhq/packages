@@ -11,7 +11,8 @@
     "contracts/comms/v1/errors.json",
     "contracts/metering/v1/meter-registry.json",
     "functions/builders/js-platform-prelude.js",
-    "contracts/functions/v1/correlation-v1.json"
+    "contracts/functions/v1/correlation-v1.json",
+    "contracts/flex/v1/requests.json"
   ],
   "interfaces": {
     "flex-query": [

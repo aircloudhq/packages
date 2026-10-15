@@ -82,6 +82,22 @@ import { resourcePage } from "@aircloudhq/web/react";
 export default resourcePage("pet");
 ```
 
+Routing inside a page uses the router primitives `@aircloudhq/web/react` re-exports — `Link`, `NavLink`,
+`Routes`, `Route`, `Outlet`, `Navigate`, `useLocation`, `useNavigate`, `useParams`, `useSearchParams` — the
+same React Router instance the `SiteRouter` renders with. Import them from `@aircloudhq/web/react`, never from
+`react-router`: a second copy of the router breaks its context.
+
+Dates and times render through `l` (`useI18n().l`, or `l` from `@aircloudhq/web/helpers/translation`), never
+`Intl`. A named format is looked up by what the value is:
+
+- an **instant** — a `Date` or a timestamp — reads `time.formats.<name>` and renders in the product's time zone;
+- a **civil date** — a `"YYYY-MM-DD"` string — reads `date.formats.<name>`.
+
+So `l(new Date(), { format: "weekday" })` reads `time.formats.weekday`; for `date.formats.weekday` pass the civil
+date (`l("2026-03-08", { format: "weekday" })`). A format no locale of the chain defines renders humanized and
+is **reported**, like a missing key: with a `release`, to the product host; with none (a dev server, a preview),
+`I18nProvider` warns on the console, naming the rule.
+
 A function answers in the caller's locale (`app/functions/pet/index.js`):
 
 ```js
@@ -98,7 +114,7 @@ async function methodNotAllowed(request) {
 
 | Import | What it carries |
 |---|---|
-| `@aircloudhq/web/react` | `SiteRouter`, `I18nProvider`, `useT`, `useSite`, `LinkTo`, `FormWith`, `resourcePage` |
+| `@aircloudhq/web/react` | `SiteRouter`, `I18nProvider`, `useT`, `useSite`, `LinkTo`, `FormWith`, `resourcePage`, the data hooks `useList` / `useRecord`, and the router primitives (`Link`, `Routes`, `useParams`, …) |
 | `@aircloudhq/web/helpers/number` | `numberToCurrency`, `numberToPercentage`, `numberWithDelimiter`, … |
 | `@aircloudhq/web/helpers/date` | `timeAgoInWords`, `distanceOfTimeInWords`, `distanceOfTimeInWordsToNow` |
 | `@aircloudhq/web/helpers/text`, `…/tag`, `…/url`, `…/form`, `…/sanitize`, `…/navigation` | the Action View helper modules of the same name |

@@ -2,13 +2,16 @@
 // and ErrorMessages (the platform error code's message, `errors.codes.<code>`, and the fields' full
 // messages). Every visible string is a translation: labels are human attribute names, the submit label
 // is helpers.submit.*, the relation prompt helpers.select.prompt.
-import { createContext, createElement as h, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { createContext, createElement as h, useContext, useMemo, useSyncExternalStore } from 'react';
 import { createForm, fullMessage, submitLabel } from '../helpers/form.js';
 import { humanAttributeName } from '../model.js';
-import { api } from '../api.js';
 import { recordLabel } from '../resource.js';
 import { useI18n } from './i18n.js';
 import { useSite } from './router.js';
+import { useList } from './data.js';
+
+/** The records a relation select offers: one Flex query page at its maximum (contracts/flex/v1/requests.json `limit`). */
+export const RELATION_OPTIONS_LIMIT = 200;
 
 const FormContext = createContext(null);
 
@@ -27,11 +30,15 @@ function Field({ name, children, input }) {
   const { form, state } = useForm();
   const i18n = useI18n();
   const errors = state.errors[name] ?? [];
+  // A generator default has no value until Flex evaluates it: a new record's field names it instead
+  // (ADR-259 decision 9).
+  const generator = form.id === undefined ? form.fields.find((f) => f.name === name)?.default?.generator : undefined;
   return h(
     'div',
     { className: errors.length ? 'field field_with_errors' : 'field' },
     h('label', { htmlFor: `${form.resource.entity}_${name}` }, humanAttributeName(form.resource, name, { i18n })),
     input,
+    generator ? h('p', { className: 'field-hint' }, i18n.t(`helpers.resource.default_generator.${generator}`)) : null,
     errors.length ? h('p', { className: 'field-error', role: 'alert' }, errors.join(', ')) : null,
     children,
   );
@@ -90,13 +97,9 @@ export function RelationField({ name }) {
   const i18n = useI18n();
   const { projection } = useSite();
   const field = form.fields.find((f) => f.name === name);
-  const [options, setOptions] = useState([]);
-  const prefix = field?.relation?.target_prefix;
   const target = field?.relation ? projection?.resources?.[field.relation.target] : undefined;
-  useEffect(() => {
-    if (!prefix) return;
-    api('GET', `${prefix}?limit=200`).then((r) => setOptions(r?.records ?? []), () => setOptions([]));
-  }, [prefix]);
+  // The related resource's records (one Flex page, its maximum), through the same hook a page lists with.
+  const { records: options } = useList(target?.route_prefix ? target : null, { limit: RELATION_OPTIONS_LIMIT });
   const props = inputProps(name, undefined);
   delete props.type;
   return h(Field, {
@@ -110,12 +113,43 @@ export function RelationField({ name }) {
   });
 }
 
+/**
+ * An enum (ADR-258 decision 10): a select of the live values in declared order, each labelled by
+ * human_attribute_name("<field>.<value>"); a blank option when the field is optional, the select prompt
+ * when a required field has no value yet. A value outside the live list — removed, or unknown to this
+ * projection — stays as a selected, disabled option, so the form never silently changes it.
+ */
+export function EnumField({ name }) {
+  const { form, state } = useForm();
+  const i18n = useI18n();
+  const field = form.fields.find((f) => f.name === name);
+  const values = field?.enum?.values ?? [];
+  const live = values.filter((v) => !v.removed).map((v) => v.value);
+  const current = state.values[name];
+  const props = inputProps(name, undefined);
+  delete props.type;
+  const label = (value) => humanAttributeName(form.resource, `${name}.${value}`, { i18n });
+  let lead = null;
+  if (current !== '' && current !== undefined && !live.includes(current)) {
+    lead = h('option', { value: current, disabled: true }, label(current));
+  } else if (!field?.required) {
+    lead = h('option', { value: '' }, '');
+  } else if (current === '' || current === undefined) {
+    lead = h('option', { value: '' }, i18n.t('helpers.select.prompt'));
+  }
+  return h(Field, {
+    name,
+    input: h('select', props, lead, live.map((v) => h('option', { key: v, value: v }, label(v)))),
+  });
+}
+
 /** The field component of a Flex type. */
 export function fieldFor(type) {
   return (
     {
       text: TextField, integer: IntegerField, decimal: DecimalField, boolean: BooleanField, date: DateField,
       datetime: DateTimeField, json: JsonField, vector: VectorField, relation: RelationField, file: FileField,
+      enum: EnumField,
     }[type] ?? TextField
   );
 }

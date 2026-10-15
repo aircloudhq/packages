@@ -8,8 +8,8 @@
 // keyset cursor pages strictly after the boundary row in that total order.
 import { CapabilityFailure } from "../errors.js";
 import {
-  avgDecimals, canonicalize, compareNative, formatDatetimeMicros, formatDecimal, parseDatetime,
-  parseDecimal, sumDecimals, validateValue, validation,
+  avgDecimals, canonicalize, compareNative, enumDeclaredOrder, formatDatetimeMicros, formatDecimal,
+  parseDatetime, parseDecimal, sumDecimals, validateOperand, validation,
 } from "./flex-values.js";
 
 const MAX_FILTER_DEPTH = 4;
@@ -19,8 +19,6 @@ const MAX_SORT_KEYS = 3;
 const MAX_FTS_LEN = 1024;
 const MIN_VECTOR_K = 1;
 const MAX_VECTOR_K = 100;
-const MIN_LIMIT = 1;
-const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 50;
 const MAX_GROUPS = 1000;
 const QUERY_KEYS = ["filter", "sort", "limit", "cursor", "search", "aggregate"];
@@ -36,13 +34,27 @@ const OP_MATRIX = {
   json: ["is_null"],
   file: ["is_null"],
   vector: ["is_null"],
+  enum: ["eq", "neq", "in", "is_null"],
 };
 const OPS = ["eq", "neq", "gt", "gte", "lt", "lte", "in", "contains", "is_null"];
-const SORTABLE = ["text", "integer", "decimal", "datetime", "date"];
+// An enum sorts by declared position (ADR-258 decision 3) but has no min/max: its magnitude is its
+// position, which is schema, not data.
+const SORTABLE = ["text", "integer", "decimal", "datetime", "date", "enum"];
+const MIN_MAX_TYPES = ["text", "integer", "decimal", "datetime", "date"];
 const AGG_FNS = ["count", "sum", "avg", "min", "max"];
-const GROUP_BY_TYPES = ["text", "integer", "boolean", "date", "relation"];
+const GROUP_BY_TYPES = ["text", "integer", "boolean", "date", "relation", "enum"];
 
-export const QUERY_TABLES = { OP_MATRIX, SORTABLE, GROUP_BY_TYPES };
+export const QUERY_TABLES = { OP_MATRIX, SORTABLE, MIN_MAX_TYPES, GROUP_BY_TYPES };
+
+/** Scope a refusal to the field it judged (details.fields.<field>), as ast.rs `scoped` does. */
+function scoped(f, fn) {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof CapabilityFailure && e.code === "flex.validation" && !e.details.fields) throw validation(e.detail, f.name);
+    throw e;
+  }
+}
 
 function complexity(message) {
   return new CapabilityFailure("flex.complexity_cap", message, {});
@@ -59,7 +71,11 @@ function resolveField(fields, name) {
 }
 
 // ── parse ──────────────────────────────────────────────────────────────────────────────
-export function parseQuery(fields, body) {
+/**
+ * Parse an I5 query body. `limitBound` is the Flex contract's {minimum, maximum} (contracts/flex/v1/
+ * requests.json, carried by the generated contract projection as `flexQueryLimit`).
+ */
+export function parseQuery(fields, body, limitBound) {
   if (!isObj(body)) throw validation("query body must be a JSON object");
   for (const k of Object.keys(body)) if (!QUERY_KEYS.includes(k)) throw validation(`unknown query key '${k}'`);
 
@@ -71,8 +87,9 @@ export function parseQuery(fields, body) {
   let limit = DEFAULT_LIMIT;
   if ("limit" in body) {
     const n = body.limit;
-    if (typeof n !== "number" || !Number.isInteger(n) || n < 0) throw validation("limit must be an integer 1..=200", "limit");
-    if (n < MIN_LIMIT || n > MAX_LIMIT) throw validation(`limit ${n} out of range ${MIN_LIMIT}..=${MAX_LIMIT}`, "limit");
+    const { minimum, maximum } = limitBound;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 0) throw validation(`limit must be an integer ${minimum}..=${maximum}`, "limit");
+    if (n < minimum || n > maximum) throw validation(`limit ${n} out of range ${minimum}..=${maximum}`, "limit");
     limit = n;
   }
   let cursor = null;
@@ -162,9 +179,9 @@ function parseLeaf(fields, obj, predicates) {
   if (obj.op === "in") {
     if (!Array.isArray(value)) throw validation("'in' value must be an array", obj.field);
     if (value.length > MAX_IN_VALUES) throw validation(`'in' list exceeds ${MAX_IN_VALUES} values`, obj.field);
-    return { field: f, op: "in", value: value.map((el) => { validateValue(f, el); return canonicalize(f, el); }) };
+    return { field: f, op: "in", value: value.map((el) => { scoped(f, () => validateOperand(f, el)); return canonicalize(f, el); }) };
   }
-  validateValue(f, value);
+  scoped(f, () => validateOperand(f, value));
   return { field: f, op: obj.op, value: canonicalize(f, value) };
 }
 
@@ -198,7 +215,7 @@ function parseAggregate(fields, v) {
     field = resolveField(fields, v.field);
     const legal = v.fn === "count" ? true
       : v.fn === "sum" || v.fn === "avg" ? ["integer", "decimal"].includes(field.type)
-      : SORTABLE.includes(field.type);
+      : MIN_MAX_TYPES.includes(field.type);
     if (!legal) throw validation(`aggregate '${v.fn}' is not legal on type '${field.type}'`, v.field);
   } else if (v.fn !== "count") {
     throw validation(`aggregate '${v.fn}' requires a 'field'`);
@@ -297,10 +314,22 @@ function rowCompare(sort, a, b) {
     if (!px && !py) continue;
     if (!px) return 1; // NULLS LAST in both directions
     if (!py) return -1;
-    const c = compareNative(k.field.type, x, y);
+    const c = k.field.type === "enum" ? comparePosition(k.field, x, y) : compareNative(k.field.type, x, y);
     if (c !== 0) return k.dir === "asc" ? c : -c;
   }
   return 0;
+}
+
+/**
+ * An enum compares by declared position (array_position over the declared order); an undeclared value
+ * has no position and, like SQL NULL, sorts after every declared one.
+ */
+function comparePosition(field, x, y) {
+  const order = enumDeclaredOrder(field);
+  const pos = (v) => { const i = order.indexOf(v); return i < 0 ? Infinity : i; };
+  const a = pos(x);
+  const b = pos(y);
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 function orderRows(sort, rows) {
