@@ -1,6 +1,6 @@
 {
   "name": "@aircloudhq/cli",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "The aircloud CLI: create, check and release products on Air-Cloud. Installs the signed native binary for your platform.",
   "keywords": [
     "aircloud",
@@ -29,10 +29,10 @@
     "LICENSE"
   ],
   "optionalDependencies": {
-    "@aircloudhq/cli-darwin-arm64": "0.1.0",
-    "@aircloudhq/cli-darwin-x64": "0.1.0",
-    "@aircloudhq/cli-linux-arm64": "0.1.0",
-    "@aircloudhq/cli-linux-x64": "0.1.0"
+    "@aircloudhq/cli-darwin-arm64": "0.1.2",
+    "@aircloudhq/cli-darwin-x64": "0.1.2",
+    "@aircloudhq/cli-linux-arm64": "0.1.2",
+    "@aircloudhq/cli-linux-x64": "0.1.2"
   },
   "engines": {
     "node": "^24.21.0"
