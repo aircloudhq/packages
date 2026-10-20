@@ -41,6 +41,36 @@ it("creates a pet", async () => {
 - **Egress** never leaves the process: register answers with `world.credential.respond(...)`; an
   unanswered egress fails the test rather than inventing a reply.
 
+## System tests
+
+`@aircloudhq/testing/system` is what a product's system layer (`test/system/`, Playwright) imports:
+
+```ts
+// test/system/pet.spec.ts
+import { expect, signInAs, test } from "@aircloudhq/testing/system";
+
+test("staff opens the new pet dialog", async ({ context, page }) => {
+  await signInAs(context, "staff");
+  await page.goto("/pet/");
+  await page.getByRole("button", { name: "New pet" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+});
+```
+
+- **`test` is the guarded test.** It is Playwright's `test` with its browser context guarded by the
+  product's Content-Security-Policy: every page and every interaction of every test is checked, and
+  the test fails on any violation, naming the directive, the blocked URI and the page. A violation
+  raised by an interaction — opening a dialog, showing a toast — fails the test that performed it,
+  and violations survive navigation: a new document or a second page is guarded like the first. Nothing
+  in the spec calls a check; there is no interaction it can forget.
+- **`expect`** is Playwright's, re-exported so a spec has one import.
+- **`signInAs(context, principal)`** signs the context in as a principal `test/principals.toml`
+  declares, with the session the release's verification run redeemed for it; outside a verification run
+  it refuses by name.
+
+`@playwright/test` is a peer dependency, at the version the platform's test-runner image carries the
+browsers of; a product created with `aircloud new` already pins it in `test/package.json`.
+
 ## Install
 
 A product created with `aircloud new` already carries it in `test/package.json`, at the version the

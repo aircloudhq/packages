@@ -1,10 +1,17 @@
-// @aircloudhq/testing/system — helpers for a product's system tests (Playwright).
+// @aircloudhq/testing/system — a product's system tests (Playwright).
 //
-//   import { signInAs } from "@aircloudhq/testing/system";
+//   import { expect, signInAs, test } from "@aircloudhq/testing/system";
 //   test("staff lists pets", async ({ context, page }) => {
 //     await signInAs(context, "staff");
 //     await page.goto("/pet/");
+//     await expect(page.getByRole("heading", { name: "Pets" })).toBeVisible();
 //   });
+//
+// test is Playwright's test with a guarded browser context (#719 AC4, ADR-270, src/csp-guard.js):
+// every page and every interaction of each test runs under the product's Content-Security-Policy,
+// and the test fails on any violation — one raised at load, after a navigation, or by an interaction
+// such as opening a dialog or showing a toast. expect is Playwright's, re-exported so a spec has one
+// import.
 //
 // signInAs (ADR-262 decisions 3 and 5): in a release's verification run the platform test-runner redeemed
 // each principal test/principals.toml declares ONCE, on the run's ci- host, and wrote the sessions file the
@@ -13,6 +20,15 @@
 // same sessions. Outside a verification run there is no sessions file, and it refuses by name rather than
 // let the test run anonymously.
 import { readFile } from "node:fs/promises";
+import { test as base, expect } from "@playwright/test";
+import { guardCsp } from "./src/csp-guard.js";
+
+export { expect };
+
+/** Playwright's test, its `context` fixture guarded by the product's Content-Security-Policy. */
+export const test = base.extend({
+  context: async ({ context }, use) => guardCsp(context, use),
+});
 
 /** The sessions file format version the platform test-runner writes (`aircloud test redeem`). */
 export const SESSIONS_VERSION = 1;

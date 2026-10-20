@@ -122,6 +122,32 @@ async function methodNotAllowed(request) {
 | `@aircloudhq/web/i18n` | `createI18n`, the runtime of the locale bundle |
 | `@aircloudhq/web/model` | `modelName` and the model naming helpers |
 | `@aircloudhq/web/function` | `i18nFor`, for functions |
+| `@aircloudhq/web/csp-nonce` | `cspNonce`; imported for its side effect, below |
+
+## Content-Security-Policy nonce
+
+```js
+// app/site/src/main.jsx — the first import, before any library
+import "@aircloudhq/web/csp-nonce";
+```
+
+A product's site runs under the product's declared Content-Security-Policy, and its default `style_src`
+admits no inline style. The platform adds a fresh nonce to every page response — to the directives
+`nonce_directives` lists in `config/content_security_policy.toml` (`["style_src"]` by default) and to the
+page, where the site's Vite build left a placeholder (`html.cspNonce` in `vite.config.js`). The build stamps
+the nonce on the tags it emits and on `<meta property="csp-nonce">`.
+
+Component libraries create their own `<style>` elements from script — Radix (the scroll-lock of a Dialog)
+and `sonner` (at import time) among them — and neither reads that meta. This module does: it stamps the
+nonce on every `<style>` a script creates with `document.createElement` or `createElementNS`, so those
+libraries run under the default policy with no `'unsafe-inline'`. A style created by script inherits the
+trust of the script the policy admitted; a `<style>` injected as markup (`innerHTML`,
+`insertAdjacentHTML`) or a `style` attribute stays blocked.
+
+It must be the **first** import of the site entry: a library that injects its style when its module loads
+has already created the element by the time a later import runs. `cspNonce()` returns the page's nonce
+(or `undefined` on a page without one), for code that needs to pass it on. A site created with
+`aircloud new` already imports it.
 
 ## Documentation
 

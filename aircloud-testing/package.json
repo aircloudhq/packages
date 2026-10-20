@@ -1,6 +1,6 @@
 {
   "name": "@aircloudhq/testing",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "In-memory capability doubles for Air-Cloud JavaScript functions, generated from the aircloud:capability WIT contract, plus the fetch-event harness for node:test unit tests.",
   "keywords": [
     "aircloud",
@@ -63,5 +63,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "peerDependencies": {
+    "@playwright/test": "1.63.0"
   }
 }
