@@ -63,7 +63,7 @@ export interface World {
     bearer: { plane: "service" | "end_user" | "internal" | "builder"; sub: string; roles: string[] | null; org_path: string };
     /**
      * Converge the base layer as PUT /v1/schema does: the declaration db/schema/*.toml compiles to (owner,
-     * owner_bypass_roles, shared; an enum's values and removed_values — ADR-258; a field's tagged default
+     * owner_bypass_roles, shared; write_roles — ADR-279; an enum's values and removed_values — ADR-258; a field's tagged default
      * and the product time zone with its locale-bundle rules — ADR-259, both zone keys required). Returns
      * the update ops it applied to live fields (`update_enum_values`, `update_default`).
      */
@@ -75,6 +75,7 @@ export interface World {
         owner?: string | null;
         owner_bypass_roles?: string[] | null;
         shared?: boolean | null;
+        write_roles?: { create?: string[] | null; update?: string[] | null; delete?: string[] | null } | null;
         fields?: Record<string, {
           type: string; display_name?: string | null; required?: boolean | null; removed?: boolean | null;
           target?: string | null; dims?: number | null; values?: string[] | null; removed_values?: string[] | null;
@@ -82,6 +83,15 @@ export interface World {
         }> | null;
       }>;
     }): { applied: Array<{ op: string; entity: string; field?: string }> };
+    /**
+     * Converge the base layer to the product's compiled schema — db/schema/*.toml as `aircloud test prepare`
+     * writes it (the release's tests part mounts the release's own) — read from the product the working
+     * directory sits in. Every schema entity sits at `/`, whatever node a test signed in at; owner,
+     * owner_bypass_roles, shared, write_roles and defaults are the declared ones. What a generated test calls after
+     * `world.reset()`. `testEntities` declares test-only entities beside the schema's, in the same base
+     * layer; a name the schema declares is refused.
+     */
+    declareFromSchema(testEntities?: Record<string, { display_name?: string | null; fields?: Record<string, { type: string; required?: boolean | null; [key: string]: unknown }> | null }>): { applied: Array<{ op: string; entity: string; field?: string }> };
     /** The seed surface (PUT …/records/by-key/{key}); refused for an acting end user. */
     upsertByKey(entity: string, key: string, data: Record<string, unknown>): { created: boolean; record: { id: string; data: Record<string, unknown> } };
     /** How many relation edges the current session sees pointing to, or leaving, a record. */

@@ -28,6 +28,7 @@ export {
   IntegerField,
   JsonField,
   RelationField,
+  StringField,
   TextField,
   VectorField,
   fieldFor,

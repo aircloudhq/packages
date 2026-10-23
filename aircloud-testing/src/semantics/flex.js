@@ -18,9 +18,11 @@
 // below, plus the rows of a `shared` entity stored at a strict ancestor (SELECT only). An entity declaring
 // `owner` scopes an acting end user without a bypass role to the records it owns (decision 4): create forces
 // the owner to its sub, changing the owner is flex.forbidden, another's record is flex.not_found. An edge
-// is visible when its source's row is, and, to an acting end user, only when both endpoints are. The
-// behaviour is the shared vectors' (contracts/flex/v1/{owner-policy,org-scope,acting-principal}-vectors.json,
-// test/flex_owner_vectors.test.mjs).
+// is visible when its source's row is, and, to an acting end user, only when both endpoints are. An entity
+// declaring `write_roles` (ADR-279) refuses a create, update or delete by an acting end user holding none of
+// the operation's roles with flex.role_required, before any record is read; the tenant is never checked. The
+// behaviour is the shared vectors' (contracts/flex/v1/{owner-policy,org-scope,acting-principal,write-roles}-
+// vectors.json, test/flex_owner_vectors.test.mjs).
 import { CapabilityFailure, DoubleMisuseError } from "../errors.js";
 import { admit } from "./quota.js";
 import {
@@ -30,6 +32,9 @@ import {
 import { dateAt, parseZone, ZONE_NAME_RE } from "./flex-zone.js";
 import { parseQuery, runQuery } from "./flex-query.js";
 import { atOrBelow, resolveActingPrincipal } from "./acting.js";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { PRODUCT_SCHEMA_WRITER, productRoot, productSchemaFile } from "./i18n.js";
 
 const MAX_BODY = 256 * 1024;
 const RESERVED_ENTITY_PREFIX = "sys_";
@@ -54,6 +59,33 @@ function notFound(message) {
 
 function forbidden(message) {
   return new CapabilityFailure("flex.forbidden", message, {});
+}
+
+/** ADR-279 decision 3: the refusal names the rule; its details depend on the entity and operation only. */
+function roleRequired(entity, operation, required) {
+  return new CapabilityFailure("flex.role_required", `${operation} on '${entity}' requires one of the roles ${JSON.stringify(required)}`, {
+    entity, operation, rule: `write_roles.${operation}`, required: [...required],
+  });
+}
+
+// The record writes write_roles names (flex/src/converge.rs WRITE_OPERATIONS) and the role-key grammar.
+const WRITE_OPERATIONS = ["create", "update", "delete"];
+const ROLE_KEY_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
+/** A declared `write_roles` as {create, update, delete} lists (absent and null are empty), or a refusal. */
+function parseWriteRoles(name, w) {
+  const out = { create: [], update: [], delete: [] };
+  if (w === undefined || w === null) return out;
+  if (!isObj(w)) throw validation(`entity '${name}': 'write_roles' must be an object of create, update and delete`);
+  for (const [op, list] of Object.entries(w)) {
+    if (!WRITE_OPERATIONS.includes(op)) throw validation(`unknown key '${op}' in entity '${name}' write_roles (allowed: ${WRITE_OPERATIONS.join(", ")})`);
+    if (list === null) continue;
+    if (!Array.isArray(list) || list.some((k, i) => typeof k !== "string" || !ROLE_KEY_RE.test(k) || list.indexOf(k) !== i)) {
+      throw validation(`entity '${name}': 'write_roles.${op}' must be distinct role keys (^[a-z0-9][a-z0-9_-]*$)`);
+    }
+    out[op] = [...list];
+  }
+  return out;
 }
 
 function unauthenticated(message) {
@@ -148,6 +180,12 @@ export function createFlexState(world) {
     if (!e.owner || !s.endUser) return null;
     if (s.endUser.roles.some((r) => e.ownerBypassRoles.includes(r))) return null;
     return s.endUser.sub;
+  }
+  /** ADR-279 decision 3 (the executor's check): an acting end user holds one of `operation`'s roles. */
+  function requireWriteRole(e, operation, s) {
+    const required = e.writeRoles?.[operation] ?? [];
+    if (!s.endUser || required.length === 0 || s.endUser.roles.some((r) => required.includes(r))) return;
+    throw roleRequired(e.name, operation, required);
   }
   function ownerAdmits(e, r, s) {
     const sub = ownerScope(e, s);
@@ -381,6 +419,7 @@ export function createFlexState(world) {
       const s = session();
       const e = resolveEntity(entityName, s);
       const created = validateCreate(liveFields(e), recordData(body));
+      requireWriteRole(e, "create", s);
       admit(world, FLEX_METERS.recordCreate, 1, "flex");
       const data = fillGenerated(created.data, created.generated);
       // Decision 4: an owner-scoped end user's create is owned by it, whatever the client sent.
@@ -399,6 +438,7 @@ export function createFlexState(world) {
       const s = session();
       const e = resolveEntity(entityName, s);
       const plan = validatePatch(liveFields(e), recordData(body));
+      requireWriteRole(e, "update", s);
       const r = records.get(rid);
       if (!r || r.entityId !== e.id || !writable(r, s)) throw notFound("record not found");
       // Decision 4: an owner-scoped end user cannot hand its record to another (or to none); restating
@@ -423,6 +463,7 @@ export function createFlexState(world) {
       if (rid === null) throw notFound("record not found");
       const s = session();
       const e = resolveEntity(entityName, s);
+      requireWriteRole(e, "delete", s);
       admit(world, FLEX_METERS.recordDelete, 1, "flex");
       const r = records.get(rid);
       if (!r || r.entityId !== e.id || !writable(r, s)) throw notFound("record not found");
@@ -565,7 +606,7 @@ export function createFlexState(world) {
     bearer: RUNTIME_BEARER,
     /**
      * Converge the base layer as the release's PUT /v1/schema does (ADR-217 D4): `declaration` is
-     * {entities: {<name>: {display_name, owner, owner_bypass_roles, shared, fields: {<field>: {type,
+     * {entities: {<name>: {display_name, owner, owner_bypass_roles, shared, write_roles, fields: {<field>: {type,
      * required, display_name, target, dims, values, removed_values, default}}}}, time_zone,
      * time_zone_rules} — the shape db/schema/*.toml compiles to (the zone and its rules from the release's
      * locale bundle, required — ADR-259 decision 1, R35). A default converges as one `update_default`. Owner and shared are declared here only (ADR-257 decision 1); an entity not yet live is
@@ -581,14 +622,26 @@ export function createFlexState(world) {
       const saved = world.quota.suspend();
       try {
         const declared = Object.entries(declaration.entities);
+        // #748: an entity created through the API is a layer at the session's node (createEntity), a
+        // schema-converged one the base layer at `/` (converge.rs BASE_LAYER). A test that defined the
+        // entity at a signed-in node and then declares the schema would converge over another node's
+        // layer — the silent overlay that hid the schema from every other node. Refused before any change.
+        for (const [name] of declared) {
+          const live = entities.get(name);
+          if (live && live.orgPath !== "/") {
+            throw new DoubleMisuseError(`flex.declare: entity '${name}' was created at ${live.orgPath} by defineEntity (an API-created entity is a layer at the signed-in node), and the schema declares it at / — declare a schema entity only through declareFromSchema, never also with defineEntity`);
+          }
+        }
         for (const [name, d] of declared) {
           if (d.owner_bypass_roles && !d.owner) throw validation(`entity '${name}': owner_bypass_roles is valid only with owner`);
           if (d.owner && d.shared) throw validation(`entity '${name}': an owned entity cannot be shared`);
+          parseWriteRoles(name, d.write_roles);
           const fields = Object.entries(d.fields ?? {});
           if (d.owner) {
             const f = fields.find(([n]) => n === d.owner);
             if (!f) throw validation(`entity '${name}': owner '${d.owner}' names no field`);
-            if (f[1].type !== "text") throw validation(`entity '${name}': owner '${d.owner}' is not a text field`);
+            // ADR-283 decision 7: the owner holds one line, the end user's sub.
+            if (f[1].type !== "string") throw validation(`entity '${name}': owner '${d.owner}' is not a string field`);
           }
           for (const [n, f] of fields) {
             const lists = (f.values ?? null) !== null || (f.removed_values ?? null) !== null;
@@ -637,6 +690,7 @@ export function createFlexState(world) {
           e.owner = d.owner ?? null;
           e.ownerBypassRoles = [...(d.owner_bypass_roles ?? [])];
           e.shared = d.shared === true;
+          e.writeRoles = parseWriteRoles(name, d.write_roles);
         }
         for (const [name, d] of declared) {
           const e = entities.get(name);
@@ -652,6 +706,40 @@ export function createFlexState(world) {
       } finally {
         world.quota.resume(saved);
       }
+    },
+    /**
+     * Converge the base layer to the product's compiled schema (#755 D15): the PUT /v1/schema declaration
+     * `aircloud test prepare` writes from db/schema/*.toml (the grammar's one parser, Rails' db/schema.rb)
+     * and the release's tests part mounts — read from the product the working directory sits in, at
+     * productSchemaFile. Every schema entity is created at `/` (converge.rs BASE_LAYER), whatever node a
+     * test signed in at; owner, owner_bypass_roles, shared and defaults are the declared ones (declare).
+     * `testEntities` ({<name>: {fields: {<field>: {type, …}}, …}}) declares test-only entities beside the
+     * schema's, in the same base layer — a name the schema declares is a misuse, never an override.
+     */
+    declareFromSchema(testEntities = {}) {
+      const root = productRoot(process.cwd());
+      if (root === null) {
+        throw new DoubleMisuseError("flex.declareFromSchema: not inside a product (no aircloud.toml at or above the working directory)");
+      }
+      const rel = productSchemaFile(root);
+      const file = join(root, rel);
+      if (!existsSync(file)) {
+        throw new DoubleMisuseError(`flex.declareFromSchema: no compiled schema at ${rel} — run \`${PRODUCT_SCHEMA_WRITER}\` in the product (npm test's pretest and \`aircloud test\` run it)`);
+      }
+      let declaration;
+      try {
+        declaration = JSON.parse(readFileSync(file, "utf8"));
+      } catch (e) {
+        throw new DoubleMisuseError(`flex.declareFromSchema: ${rel} is not JSON (${e.message}) — rerun \`${PRODUCT_SCHEMA_WRITER}\``);
+      }
+      if (!isObj(testEntities)) throw new DoubleMisuseError("flex.declareFromSchema: test entities are {<name>: {fields: {…}}}");
+      const schemaEntities = isObj(declaration.entities) ? declaration.entities : {};
+      for (const name of Object.keys(testEntities)) {
+        if (Object.hasOwn(schemaEntities, name)) {
+          throw new DoubleMisuseError(`flex.declareFromSchema: test entity '${name}' is declared by db/schema/${name}.toml — a test converges to the schema, never to a copy of it`);
+        }
+      }
+      return state.declare({ ...declaration, entities: { ...schemaEntities, ...testEntities } });
     },
     /**
      * PUT /v1/entities/{entity}/records/by-key/{key} — the seed surface (ADR-217 D6): create or replace the

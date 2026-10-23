@@ -20,6 +20,7 @@ export function toInput(type, value) {
       return new Date(value).toISOString().slice(0, 16);
     case 'json':
     case 'vector':
+    case 'file':
       return JSON.stringify(value);
     default:
       return String(value);
@@ -37,6 +38,7 @@ export function toValue(type, raw) {
       return new Date(`${raw}Z`).toISOString(); // the input edits UTC
     case 'json':
     case 'vector':
+    case 'file':
       return JSON.parse(raw);
     default:
       return raw;
@@ -58,6 +60,7 @@ export function validationKind(field, raw) {
       return Number.isFinite(Date.parse(`${raw}Z`)) ? null : 'invalid';
     case 'json':
     case 'vector':
+    case 'file':
       try {
         JSON.parse(raw);
         return null;

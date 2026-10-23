@@ -8,12 +8,15 @@
 // through these functions (test/flex-contract.test.mjs), so the mirror is checked, not trusted.
 import { CapabilityFailure } from "../errors.js";
 
-export const FIELD_TYPES = ["text", "integer", "decimal", "boolean", "datetime", "date", "json", "relation", "file", "vector", "enum"];
+export const FIELD_TYPES = ["text", "integer", "decimal", "boolean", "datetime", "date", "json", "relation", "file", "vector", "enum", "string"];
 export const SLUG_RE = /^[a-z][a-z0-9_]{0,62}$/;
 export const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DECIMAL_RE = /^-?[0-9]+(\.[0-9]+)?$/;
 const DECIMAL_MAX_DIGITS = 60;
 const TEXT_MAX_UTF8_BYTES = 65536;
+/** ADR-283 decision 1: a string is one line of at most 1024 UTF-8 bytes; the breaks are UAX #14 BK, CR, LF, NL. */
+const STRING_MAX_UTF8_BYTES = 1024;
+const STRING_FORBIDDEN_BREAKS = ["\u000A", "\u000B", "\u000C", "\u000D", "\u0085", "\u2028", "\u2029"];
 const INTEGER_MAX_ABS = 9007199254740991;
 const VECTOR_DIMS_MIN = 1;
 const VECTOR_DIMS_MAX = 2000;
@@ -124,6 +127,18 @@ export function validateValue(field, v) {
       if (typeof v !== "string") throw typeError("text", v);
       if (Buffer.byteLength(v, "utf8") > TEXT_MAX_UTF8_BYTES) throw validation(`text exceeds ${TEXT_MAX_UTF8_BYTES} UTF-8 bytes`);
       return;
+    case "string": {
+      if (typeof v !== "string") throw typeError("string", v);
+      if (Buffer.byteLength(v, "utf8") > STRING_MAX_UTF8_BYTES) {
+        throw validation(`string exceeds ${STRING_MAX_UTF8_BYTES} UTF-8 bytes (a longer value is text)`);
+      }
+      const brk = [...v].find((c) => STRING_FORBIDDEN_BREAKS.includes(c));
+      if (brk !== undefined) {
+        const cp = brk.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+        throw validation(`string holds a line break (U+${cp}); a string is one line, a multi-line value is text`);
+      }
+      return;
+    }
     case "integer":
       if (typeof v !== "number") throw typeError("integer", v);
       if (!Number.isInteger(v)) throw validation("integer must be an integral JSON number");

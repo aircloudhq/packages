@@ -14,8 +14,19 @@ binary is taken from the platform's signed release: the release's `checksums.txt
 platform's release key and verified before any channel is built from it, and npm's integrity check carries
 those bytes to your machine.
 
-Upgrade with npm (`npm install -g @aircloudhq/cli@latest`); `aircloud upgrade` defers to npm for an
-npm-installed binary.
+## Supported Node.js
+
+The npm packages install on Node.js `>=22.0.0`. The `aircloud` command is a native binary; Node.js only runs
+the small launcher that finds and starts it. The install is tested on each Node.js LTS line in that range.
+
+On an older Node.js, npm warns `EBADENGINE` and skips this platform's binary package. The install still
+reports success, but `aircloud` then refuses to run: it names your Node.js version and the supported range,
+and tells you to install a Node.js inside the range and reinstall.
 
 If your install skipped optional dependencies (`--omit=optional`), `aircloud` names the platform package it
 could not find; reinstall without that flag.
+
+## Upgrading
+
+Upgrade with npm (`npm install -g @aircloudhq/cli@latest`); `aircloud upgrade` defers to npm for an
+npm-installed binary.

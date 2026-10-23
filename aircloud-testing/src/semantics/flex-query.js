@@ -25,6 +25,8 @@ const QUERY_KEYS = ["filter", "sort", "limit", "cursor", "search", "aggregate"];
 
 const OP_MATRIX = {
   text: ["eq", "neq", "in", "contains", "is_null"],
+  // ADR-283 decision 3: string takes text's rows.
+  string: ["eq", "neq", "in", "contains", "is_null"],
   integer: ["eq", "neq", "gt", "gte", "lt", "lte", "in", "is_null"],
   decimal: ["eq", "neq", "gt", "gte", "lt", "lte", "in", "is_null"],
   datetime: ["eq", "neq", "gt", "gte", "lt", "lte", "in", "is_null"],
@@ -39,10 +41,10 @@ const OP_MATRIX = {
 const OPS = ["eq", "neq", "gt", "gte", "lt", "lte", "in", "contains", "is_null"];
 // An enum sorts by declared position (ADR-258 decision 3) but has no min/max: its magnitude is its
 // position, which is schema, not data.
-const SORTABLE = ["text", "integer", "decimal", "datetime", "date", "enum"];
-const MIN_MAX_TYPES = ["text", "integer", "decimal", "datetime", "date"];
+const SORTABLE = ["text", "string", "integer", "decimal", "datetime", "date", "enum"];
+const MIN_MAX_TYPES = ["text", "string", "integer", "decimal", "datetime", "date"];
 const AGG_FNS = ["count", "sum", "avg", "min", "max"];
-const GROUP_BY_TYPES = ["text", "integer", "boolean", "date", "relation", "enum"];
+const GROUP_BY_TYPES = ["text", "string", "integer", "boolean", "date", "relation", "enum"];
 
 export const QUERY_TABLES = { OP_MATRIX, SORTABLE, MIN_MAX_TYPES, GROUP_BY_TYPES };
 

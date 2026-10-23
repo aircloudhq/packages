@@ -64,7 +64,14 @@ const typed = (type, extra = {}) =>
     return h(Field, { name, input: h('input', { ...inputProps(name, type), ...extra }) });
   };
 
-export const TextField = typed('text');
+// ADR-283 decisions 1-2: a string is one line, edited with an input (Rails' text_field); a text is
+// multi-line, edited with a textarea (Rails' text_area).
+export const StringField = typed('text');
+
+export function TextField({ name }) {
+  return h(Field, { name, input: h('textarea', inputProps(name, undefined)) });
+}
+
 export const IntegerField = typed('number', { step: 1 });
 export const DecimalField = typed('text', { inputMode: 'decimal' });
 export const DateField = typed('date');
@@ -147,10 +154,10 @@ export function EnumField({ name }) {
 export function fieldFor(type) {
   return (
     {
-      text: TextField, integer: IntegerField, decimal: DecimalField, boolean: BooleanField, date: DateField,
+      string: StringField, text: TextField, integer: IntegerField, decimal: DecimalField, boolean: BooleanField, date: DateField,
       datetime: DateTimeField, json: JsonField, vector: VectorField, relation: RelationField, file: FileField,
       enum: EnumField,
-    }[type] ?? TextField
+    }[type] ?? StringField
   );
 }
 

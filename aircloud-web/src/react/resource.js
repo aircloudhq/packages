@@ -62,6 +62,7 @@ export function useDisplay(resource, display = {}, relationLabel = () => undefin
         return humanAttributeName(resource, `${field}.${value}`, { i18n });
       case 'json':
       case 'vector':
+      case 'file':
         return JSON.stringify(value);
       default:
         return String(value);
@@ -69,17 +70,26 @@ export function useDisplay(resource, display = {}, relationLabel = () => undefin
   };
 }
 
+/** A line break inside a text value: CR LF, or any Unicode mandatory break (UAX #14 BK, CR, LF, NL). */
+const LINE_BREAK = /\r\n|[\n\v\f\r\u0085\u2028\u2029]/;
+
 /**
  * The list and show views' cell: `show`'s rendering, with an enum value wrapped in a badge (ADR-258
  * decision 10) — class `badge` plus `data-field` and `data-value`, the stable hooks a product's CSS styles
- * each value by. A `display` override renders as given.
+ * each value by — and a text value's lines kept (ADR-283 decision 4): each break a <br>, as Rails'
+ * simple_format renders one, the value always text and never markup. A `display` override renders as given.
  */
 function badged(resource, display = {}, show) {
   return (field, record) => {
     const node = show(field, record);
     const value = record?.data?.[field];
     if (display[field] || value === undefined || value === null || value === '') return node;
-    if (resource.fields.find((f) => f.name === field)?.type !== 'enum') return node;
+    const type = resource.fields.find((f) => f.name === field)?.type;
+    if (type === 'text') {
+      const lines = String(value).split(LINE_BREAK);
+      return h('span', { 'data-field': field }, lines.flatMap((l, i) => (i === 0 ? [l] : [h('br', { key: i }), l])));
+    }
+    if (type !== 'enum') return node;
     return h('span', { className: 'badge', 'data-field': field, 'data-value': String(value) }, node);
   };
 }

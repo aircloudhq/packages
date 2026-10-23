@@ -41,6 +41,22 @@ export const PRODUCT_SITE_DIR = "app/site";
 export const PRODUCT_BUNDLE_FILE = "app/site/.aircloud/locale-bundle.json";
 export const API_PRODUCT_BUNDLE_FILE = ".aircloud/locale-bundle.json";
 
+/**
+ * The product's compiled schema (#755 D15), relative to its root: beside the bundle, in the same derived
+ * directory, placed by the same decision (skeleton.SchemaDeclarationFile; literal mirrors held equal by
+ * functions.TestLocaleBundleFileIsTheDoublesPath). `aircloud test prepare` writes it; the release's tests
+ * part mounts the release's own.
+ */
+export const PRODUCT_SCHEMA_FILE = "app/site/.aircloud/schema.json";
+export const API_PRODUCT_SCHEMA_FILE = ".aircloud/schema.json";
+/** The command that writes the compiled schema locally. */
+export const PRODUCT_SCHEMA_WRITER = "aircloud test prepare";
+
+/** The compiled-schema file a product at `root` reads, relative to it. */
+export function productSchemaFile(root) {
+  return existsSync(join(root, PRODUCT_SITE_DIR)) ? PRODUCT_SCHEMA_FILE : API_PRODUCT_SCHEMA_FILE;
+}
+
 /** The bundle file a product at `root` reads, relative to it. */
 export function productBundleFile(root) {
   return existsSync(join(root, PRODUCT_SITE_DIR)) ? PRODUCT_BUNDLE_FILE : API_PRODUCT_BUNDLE_FILE;
