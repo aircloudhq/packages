@@ -26,8 +26,16 @@
 // ComponentError (payload.code `functions.locale_bundle_unresolvable`) and it reaches the function.
 // A key no locale resolves renders humanized and is reported through the capability, which alarms
 // once per key per release.
+//
+// Dates and times in a zone come from the same bundle's zone rules (D4), never the host's Intl or
+// time-zone database:
+//
+//   civilDate(i18n, { zone: 'America/Sao_Paulo' });                                  // '2024-06-01'
+//   instantOf(i18n, { zone: 'America/Sao_Paulo', date: '2024-06-01', time: '19:00' }); // a Date
 import { bundle, keyMissing, locales } from 'aircloud:functions/i18n@1.0.0';
-import { acceptLanguage, createI18n, lookupLocale, OPTION_KEYS } from './i18n/index.js';
+import { civilFromDays, daysFromCivil } from './i18n/civil.js';
+import { acceptLanguage, brokenDown, bundleZone, createI18n, lookupLocale, OPTION_KEYS } from './i18n/index.js';
+import { zoneInstant } from './i18n/zone.js';
 
 function canonical(available, tag) {
   if (typeof tag !== 'string') return undefined;
@@ -131,4 +139,43 @@ export async function errorResponse(request, status, error, { function: name } =
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+const pad = (n, width = 2) => String(n).padStart(width, '0');
+
+/**
+ * The civil date ('YYYY-MM-DD') on the wall in `zone` at the instant `at` — "today there" by default.
+ * @param {{bundle: object}} i18n an i18n runtime (i18nFor / createI18n): its bundle carries the zone rules
+ * @param {{zone?: string, at?: Date|number|string}} [options] the zone (default: the bundle's
+ *   time_zone) and the instant (a Date, epoch milliseconds or an ISO string; default: now)
+ */
+export function civilDate(i18n, { zone, at = Date.now() } = {}) {
+  const t = brokenDown(i18n.bundle, at, zone);
+  return `${pad(t.year, 4)}-${pad(t.month)}-${pad(t.day)}`;
+}
+
+const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const TIME = /^(\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+/**
+ * The instant at which `zone`'s wall clock reads `date` `time`, with Temporal's 'compatible'
+ * disambiguation: a wall time the zone passes twice is the earlier instant, one it skips is shifted
+ * forward by the gap.
+ * @param {{bundle: object}} i18n an i18n runtime (i18nFor / createI18n): its bundle carries the zone rules
+ * @param {{zone?: string, date: string, time?: string}} options the zone (default: the bundle's
+ *   time_zone), the civil date 'YYYY-MM-DD' and the wall time 'HH:MM' or 'HH:MM:SS' (default '00:00')
+ * @returns {Date}
+ */
+export function instantOf(i18n, { zone, date, time = '00:00' } = {}) {
+  const d = DATE.exec(String(date));
+  const civil = d && d.slice(1).map(Number);
+  if (!civil || civilFromDays(daysFromCivil(...civil)).join('-') !== civil.join('-')) {
+    throw new RangeError(`instantOf: not a civil date (YYYY-MM-DD): ${date}`);
+  }
+  const t = TIME.exec(String(time));
+  const [h, m, s] = t ? [Number(t[1]), Number(t[2]), Number(t[3] ?? 0)] : [];
+  if (!t || h > 23 || m > 59 || s > 59) throw new RangeError(`instantOf: not a wall time (HH:MM[:SS]): ${time}`);
+  const rules = bundleZone(i18n.bundle, zone);
+  const wall = daysFromCivil(...civil) * 86400 + h * 3600 + m * 60 + s;
+  return new Date(zoneInstant(rules, wall) * 1000);
 }

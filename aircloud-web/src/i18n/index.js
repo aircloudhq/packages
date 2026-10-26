@@ -187,6 +187,14 @@ function nameSource(bundle, locale) {
   };
 }
 
+/** The rules of the zone `zoneName` (default: the bundle's time_zone); a zone the bundle lacks throws. */
+export function bundleZone(bundle, zoneName) {
+  const name = zoneName ?? bundle.time_zone;
+  const zone = bundle.zones?.[name];
+  if (!zone) throw new Error(`l: the bundle carries no rules for the zone ${name}`);
+  return zone;
+}
+
 /** Break a value down to local time: a civil date string, or an instant rendered in `zone`. */
 export function brokenDown(bundle, value, zoneName) {
   if (typeof value === 'string' && CIVIL.test(value)) {
@@ -195,9 +203,7 @@ export function brokenDown(bundle, value, zoneName) {
   }
   const ms = value instanceof Date ? value.getTime() : typeof value === 'number' ? value : Date.parse(value);
   if (!Number.isFinite(ms)) throw new RangeError(`l: not a date or time: ${value}`);
-  const name = zoneName ?? bundle.time_zone;
-  const zone = bundle.zones?.[name];
-  if (!zone) throw new Error(`l: the bundle carries no rules for the zone ${name}`);
+  const zone = bundleZone(bundle, zoneName);
   const at = Math.floor(ms / 1000);
   const lt = zoneAt(zone, at);
   const local = at + lt.offset;

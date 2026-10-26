@@ -19,6 +19,23 @@ export function zoneAt(zone, at) {
   return { offset, dst, abbr };
 }
 
+/**
+ * The Unix second at which `zone`'s wall clock reads `wall` (seconds since the epoch, as if local time
+ * were UTC) — the inverse of `zoneAt`, with Temporal's 'compatible' disambiguation: a wall time the zone
+ * passes twice (an overlap) is the earlier instant; one it skips (a gap) is shifted forward by the gap,
+ * i.e. read with the offset in force before the transition.
+ */
+export function zoneInstant(zone, wall) {
+  // The offsets in force a day either side bound every candidate (no zone moves twice in a day).
+  const before = zoneAt(zone, wall - 86400).offset;
+  const after = zoneAt(zone, wall + 86400).offset;
+  const valid = [...new Set([before, after])]
+    .map((offset) => wall - offset)
+    .filter((at) => wall - zoneAt(zone, at).offset === at)
+    .sort((a, b) => a - b);
+  return valid.length > 0 ? valid[0] : wall - before;
+}
+
 function ruleAt(rule, at) {
   if (!rule.dst) return rule.std;
   const [year] = civilFromDays(floorDiv(at + rule.std.offset, 86400));

@@ -12,6 +12,10 @@
 // generated/platform-prelude.js) is prepended to every guest the platform builds; importing this
 // package evaluates the same prelude, so a function's BigInt serialization behaves as it will live.
 //
+// THE LOCALE AND TIME ZONE. For the duration of an invocation the guest sees the functions runtime's
+// Intl and time-zone behaviour, measured in functions-host (#768 I15), not Node's: no Intl, local time
+// UTC, the Date locale methods' fixed shapes (src/runtime-locale.js).
+//
 // THE CORRELATION ID. Each invocation resolves one correlation id as the host's entry surface does
 // (src/correlation.js, contracts/functions/v1/correlation-v1.json): the caller's x-correlation-id when
 // it is a UUID, else a minted one. The guest's request carries it under that header, replacing the
@@ -22,6 +26,7 @@ import { isAbsolute, resolve } from "node:path";
 import "../generated/platform-prelude.js";
 import { CORRELATION_HEADER, resolveCorrelationId, withInvocation } from "./correlation.js";
 import { DoubleMisuseError } from "./errors.js";
+import { withRuntimeLocale } from "./runtime-locale.js";
 
 let invocation = 0;
 
@@ -64,7 +69,7 @@ export async function invoke(entry, request) {
   const headers = new Headers(sent.headers);
   headers.set(CORRELATION_HEADER, correlationId);
   const req = new Request(sent, { headers });
-  return withInvocation(correlationId, () => dispatch(entry, req));
+  return withInvocation(correlationId, () => withRuntimeLocale(() => dispatch(entry, req)));
 }
 
 async function dispatch(entry, req) {
