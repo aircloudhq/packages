@@ -12,12 +12,20 @@
     "contracts/metering/v1/meter-registry.json",
     "functions/builders/js-platform-prelude.js",
     "contracts/functions/v1/correlation-v1.json",
-    "contracts/flex/v1/requests.json"
+    "contracts/flex/v1/requests.json",
+    "contracts/flex/v1/end-user-assertion.json",
+    "contracts/flex/v1/types.json",
+    "contracts/flex/v1/field-policy-vectors.json",
+    "contracts/auth/v1/account-lifecycle.json",
+    "contracts/deploy/v1/skeleton-v1.json"
   ],
   "interfaces": {
     "flex-query": [
       "query",
-      "get-record"
+      "get-record",
+      "aggregate-elevated",
+      "explain",
+      "policy"
     ],
     "flex-mutate": [
       "create-record",
@@ -32,7 +40,17 @@
       "add-field",
       "update-field",
       "remove-field",
-      "update-entity"
+      "update-entity",
+      "put-policy",
+      "delete-policy",
+      "create-changeset",
+      "get-changeset",
+      "update-changeset",
+      "discard-changeset",
+      "diff-changeset",
+      "changeset-impact",
+      "publish-changeset",
+      "create-rollback"
     ],
     "quota": [
       "check"
@@ -59,6 +77,43 @@
     "comms-suppression": [
       "list-suppressions"
     ],
+    "org-nodes": [
+      "list-nodes",
+      "create-node",
+      "archive-node",
+      "unarchive-node",
+      "delete-node"
+    ],
+    "members": [
+      "list-members",
+      "invite",
+      "update",
+      "remove",
+      "unblock",
+      "grant",
+      "revoke-grant",
+      "memberships"
+    ],
+    "profiles": [
+      "list-profiles",
+      "put",
+      "remove"
+    ],
+    "groups": [
+      "list-groups",
+      "put",
+      "remove",
+      "add-member",
+      "remove-member"
+    ],
+    "denies": [
+      "list-denies",
+      "put",
+      "remove"
+    ],
+    "workspaces": [
+      "create"
+    ],
     "i18n": [
       "locales",
       "bundle",
@@ -68,12 +123,20 @@
       "current",
       "flash",
       "set-flash",
-      "csrf-token"
+      "csrf-token",
+      "membership-id",
+      "grants",
+      "roles-at"
+    ],
+    "acting-node": [
+      "current",
+      "narrow"
     ]
   },
   "runtime": [
     "i18n",
-    "principal"
+    "principal",
+    "acting-node"
   ],
   "unbound": []
 }

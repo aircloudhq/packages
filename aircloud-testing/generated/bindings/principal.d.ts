@@ -24,3 +24,22 @@ export function setFlash(message: string): void;
  * principal.csrf-token
  */
 export function csrfToken(): string | undefined;
+
+/**
+ * principal.membership-id
+ */
+export function membershipId(): string | undefined;
+
+/**
+ * principal.grants
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function grants(): Array<T.Principal.Grant>;
+
+/**
+ * principal.roles-at
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function rolesAt(node: string): Array<string>;

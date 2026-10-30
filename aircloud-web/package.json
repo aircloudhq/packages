@@ -1,6 +1,6 @@
 {
   "name": "@aircloudhq/web",
-  "version": "1.4.0",
+  "version": "1.7.0",
   "description": "The application package of an Air-Cloud product: the Rails Action View helpers, i18n over the product's locale bundle, resource pages over its models, and React bindings, for its site and its JavaScript functions.",
   "keywords": [
     "aircloud",
@@ -43,6 +43,7 @@
     "./model": "./src/model.js",
     "./resource": "./src/resource.js",
     "./api": "./src/api.js",
+    "./org": "./src/org.js",
     "./i18n": "./src/i18n/index.js",
     "./function": "./src/function.js",
     "./react": "./src/react/index.js",

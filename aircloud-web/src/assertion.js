@@ -68,7 +68,7 @@ const text = (v, what) => {
  * end user it asserts.
  * @param {Request|{headers: Headers}} request
  * @param {{jwksFile?: string, tenantId?: string, issuer?: string, host?: string, now?: () => number}} [options]
- * @returns {Promise<{sub: string, tenantId: string, orgPath: string, roles: string[], act: object|null, flash: string|null, csrf: string|null}>}
+ * @returns {Promise<{sub: string, tenantId: string, membershipId: string, orgPath: string, roles: string[], act: object|null, flash: string|null, csrf: string|null}>}
  */
 export async function verifyPrincipal(request, options = {}) {
   const jwksFile = options.jwksFile ?? env('AIR_PRINCIPAL_JWKS_FILE');
@@ -98,6 +98,7 @@ export async function verifyPrincipal(request, options = {}) {
   if (now >= c.exp) throw new Error('the assertion has expired');
   if (Math.max(c.iat, c.nbf ?? 0) > now + CLOCK_SKEW_SECS) throw new Error('the assertion is not valid yet');
   if (c.tenant_id !== tenantId) throw new Error('the assertion is for another tenant');
+  if (typeof c.membership_id !== 'string' || c.membership_id === '') throw new Error('the assertion carries no membership_id');
   if (typeof c.org_path !== 'string' || !c.org_path.startsWith('/')) throw new Error('the assertion carries no org_path');
   if (typeof c.sub !== 'string' || c.sub === '') throw new Error('the assertion carries no sub');
   const roles = c.roles ?? [];
@@ -105,6 +106,7 @@ export async function verifyPrincipal(request, options = {}) {
   return {
     sub: c.sub,
     tenantId: c.tenant_id,
+    membershipId: c.membership_id,
     orgPath: c.org_path,
     roles,
     act: c.act ?? null,

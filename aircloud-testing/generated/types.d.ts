@@ -152,6 +152,24 @@ export namespace CommsSuppression {
   }
 }
 
+export namespace OrgNodes {
+}
+
+export namespace Members {
+}
+
+export namespace Profiles {
+}
+
+export namespace Groups {
+}
+
+export namespace Denies {
+}
+
+export namespace Workspaces {
+}
+
 export namespace I18n {
 }
 
@@ -163,4 +181,17 @@ export namespace Principal {
     roles: Array<string>;
     act?: string;
   }
+  export interface ProfileRef {
+    orgPath: string;
+    name: string;
+  }
+  export interface Grant {
+    orgPath: string;
+    profile: Principal.ProfileRef;
+    roles: Array<string>;
+    expiresAt?: string;
+  }
+}
+
+export namespace ActingNode {
 }

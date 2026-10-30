@@ -7,8 +7,56 @@
 //
 // The typed per-entity client is Air-Reflect's typed SDK (#246, ADR-083); these hooks read the projection.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createResource, projectionResource, recordLabel } from '../resource.js';
+import { applyFieldSchema, createResource, fieldSchema, projectionResource, recordLabel, SURFACES } from '../resource.js';
 import { useSite } from './router.js';
+
+/**
+ * The resource as the session may see it on `surface` (#384 D104): the field-schema read
+ * (`GET /_air/fields/{entity}`) applied to the projection resource — only the fields it lists, each with
+ * `read_only`. Read ONCE per site for each entity and surface; `ready` is false until it settles. A read
+ * that fails leaves the projection's fields: the schema only filters and disables what a page renders,
+ * and Flex stays the enforcement of every read and write.
+ * @param {string|object|null} resource
+ * @param {string} surface  one of SURFACES
+ * @returns {{resource: object|null, ready: boolean}}
+ */
+export function useFieldSchema(resource, surface) {
+  const r = useResource(resource);
+  const { fieldSchemas } = useSite();
+  const key = r ? `${r.entity}|${surface}` : null;
+  const [, settled] = useState(0);
+  useEffect(() => {
+    if (!key) return undefined;
+    let entry = fieldSchemas.get(key);
+    if (!entry) {
+      entry = { done: false, schema: null };
+      entry.promise = Promise.resolve()
+        .then(() => fieldSchema(r.entity, surface))
+        .then(
+          (schema) => {
+            entry.schema = schema;
+          },
+          () => {
+            entry.schema = null;
+          },
+        )
+        .finally(() => {
+          entry.done = true;
+        });
+      fieldSchemas.set(key, entry);
+    }
+    let live = true;
+    if (!entry.done) entry.promise.then(() => live && settled((n) => n + 1));
+    return () => {
+      live = false;
+    };
+  }, [key, fieldSchemas, r, surface]);
+  const entry = key ? fieldSchemas.get(key) : undefined;
+  const done = Boolean(entry?.done);
+  const schema = entry?.schema ?? null;
+  const visible = useMemo(() => (r && done ? applyFieldSchema(r, schema) : r), [r, done, schema]);
+  return { resource: visible, ready: !key || done };
+}
 
 /** The projection resource a hook names: an entity name, the resource itself, or null (no resource). */
 export function useResource(resource) {
@@ -18,13 +66,16 @@ export function useResource(resource) {
 }
 
 /**
- * The records of a resource, page by page (`cursor` paging; `more()` appends the next page).
+ * The records of a resource, page by page (`cursor` paging; `more()` appends the next page). The reads
+ * declare `surface` (#384 D82): a table by default, `SURFACES.form` inside a form.
  * @param {string|object|null} resource  null lists nothing
- * @param {{filter?: Record<string, string>, limit?: number}} [query]  `filter` compares fields by equality
+ * @param {{filter?: Record<string, string>, limit?: number, surface?: string}} [query]  `filter` compares
+ *   fields by equality
  */
 export function useList(resource, query = {}) {
   const r = useResource(resource);
-  const client = useMemo(() => (r ? createResource(r) : null), [r]);
+  const surface = query.surface ?? SURFACES.table;
+  const client = useMemo(() => (r ? createResource(r, { surface }) : null), [r, surface]);
   const key = JSON.stringify({ filter: query.filter ?? {}, limit: query.limit ?? null });
   const [state, setState] = useState({ records: [], cursor: null, loading: Boolean(client), error: null });
   const generation = useRef(0);
@@ -62,13 +113,16 @@ export function useList(resource, query = {}) {
 }
 
 /**
- * One record of a resource by id; an undefined id reads nothing (`record` null).
+ * One record of a resource by id; an undefined id reads nothing (`record` null). The read declares
+ * `surface` (#384 D82): a record view, `SURFACES.form`, by default.
  * @param {string|object} resource
  * @param {string|undefined} id
+ * @param {{surface?: string}} [options]
  */
-export function useRecord(resource, id) {
+export function useRecord(resource, id, options = {}) {
   const r = useResource(resource);
-  const client = useMemo(() => createResource(r), [r]);
+  const surface = options.surface ?? SURFACES.form;
+  const client = useMemo(() => createResource(r, { surface }), [r, surface]);
   const [state, setState] = useState({ record: null, loading: id !== undefined, error: null });
   const generation = useRef(0);
   const load = useCallback(() => {
@@ -90,9 +144,10 @@ export function useRecord(resource, id) {
 
 /**
  * The labels of the related records the given records point to, one read per distinct related record:
- * `(field, id) => label | undefined` (undefined until read, or when the target is not routed).
+ * `(field, id) => label | undefined` (undefined until read, or when the target is not routed). The reads
+ * declare the surface the labels show on (#384 D82): a table by default.
  */
-export function useRelationLabels(resource, records) {
+export function useRelationLabels(resource, records, surface = SURFACES.table) {
   const { projection } = useSite();
   const wanted = useMemo(() => {
     const out = [];
@@ -119,11 +174,11 @@ export function useRelationLabels(resource, records) {
       if (requested.current.has(k)) continue;
       requested.current.add(k);
       const settle = (label) => mounted.current && setLabels((m) => ({ ...m, [k]: label }));
-      createResource(target)
+      createResource(target, { surface })
         .get(id)
         .then((rec) => settle(recordLabel(target, rec)), () => settle(null));
     }
-  }, [wanted]);
+  }, [wanted, surface]);
   return (field, id) => {
     const f = resource.fields.find((x) => x.name === field);
     const target = f?.relation?.target;

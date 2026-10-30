@@ -162,7 +162,7 @@ export function createForm(resource, options = {}) {
     validate() {
       const errors = {};
       for (const f of resource.fields) {
-        if (defaulted(f)) continue;
+        if (defaulted(f) || f.read_only) continue;
         const kind = validationKind(f, state.values[f.name]);
         if (kind) errors[f.name] = [errorMessage(resource, f.name, kind, { i18n: i18n() })];
       }
@@ -176,7 +176,8 @@ export function createForm(resource, options = {}) {
     payload() {
       const data = {};
       for (const f of resource.fields) {
-        if (defaulted(f)) continue;
+        // A read_only field (#384 D104: the session may see it, not write it) is never sent.
+        if (defaulted(f) || f.read_only) continue;
         const v = toValue(f.type, state.values[f.name]);
         if (v !== undefined) data[f.name] = v;
         else if (model.id !== undefined || f.default) data[f.name] = null;

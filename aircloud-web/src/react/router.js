@@ -6,13 +6,17 @@
 // and src/main.jsx renders <SiteRouter routes={routes} layouts={layouts} projection={projection} />.
 // Each page renders inside its layout and its lazy-lookup scope (`t(".title")` in
 // pages/membros/index.jsx is `membros.index.title`).
-import { createContext, createElement as h, useContext } from 'react';
+import { createContext, createElement as h, useContext, useMemo } from 'react';
 import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router';
 import { PageScope } from './i18n.js';
 
-const SiteContext = createContext({ layouts: {}, projection: null });
+// Outside a SiteRouter (a hook rendered on its own) the field schemas are read into this one map.
+const SiteContext = createContext({ layouts: {}, projection: null, fieldSchemas: new Map() });
 
-/** The layouts and the resource projection the site renders with. */
+/**
+ * The layouts and the resource projection the site renders with, and its field-schema reads (#384 D104:
+ * each entity and surface read once per site, `useFieldSchema`).
+ */
 export function useSite() {
   return useContext(SiteContext);
 }
@@ -40,5 +44,7 @@ export function SiteRouter({ routes, layouts = {}, projection = null, basename, 
   );
   const table = h(Routes, null, children);
   const router = initialEntries ? h(MemoryRouter, { initialEntries, basename }, table) : h(BrowserRouter, { basename }, table);
-  return h(SiteContext.Provider, { value: { layouts, projection } }, router);
+  const fieldSchemas = useMemo(() => new Map(), []);
+  const value = useMemo(() => ({ layouts, projection, fieldSchemas }), [layouts, projection, fieldSchemas]);
+  return h(SiteContext.Provider, { value }, router);
 }

@@ -6,3 +6,6 @@ import { bind } from "../../src/binding.js";
 
 export const query = bind("flex-query", "query");
 export const getRecord = bind("flex-query", "get-record");
+export const aggregateElevated = bind("flex-query", "aggregate-elevated");
+export const explain = bind("flex-query", "explain");
+export const policy = bind("flex-query", "policy");

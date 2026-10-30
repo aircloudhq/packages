@@ -35,4 +35,4 @@ export {
   useForm,
 } from './form.js';
 export { Resource, ResourceForm, ResourceList, ResourceShow, ResourceTabs, defaultColumns, resourcePage, useDisplay } from './resource.js';
-export { hasManyRelations, useList, useRecord } from './data.js';
+export { hasManyRelations, useFieldSchema, useList, useRecord } from './data.js';

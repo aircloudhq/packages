@@ -12,5 +12,6 @@ export * from './helpers/form.js';
 export * from './model.js';
 export * from './resource.js';
 export * from './api.js';
+export * from './org.js';
 export { createI18n, negotiateLocale, createMissingReporter } from './i18n/index.js';
 export { setCurrentI18n, currentI18n } from './i18n/current.js';

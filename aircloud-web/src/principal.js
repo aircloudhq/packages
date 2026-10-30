@@ -14,19 +14,54 @@
 //
 // The CSRF check is the session edge's (the web-origin): an unsafe request is accepted when its
 // `Origin` is the product's, and a client that sends no `Origin` proves it with the session's token.
-import { csrfToken as wireCsrf, current, flash as wireFlash, setFlash as wireSetFlash } from 'aircloud:functions/principal@1.0.0';
+import {
+  csrfToken as wireCsrf,
+  current,
+  flash as wireFlash,
+  grants as wireGrants,
+  membershipId,
+  rolesAt as wireRolesAt,
+  setFlash as wireSetFlash,
+} from 'aircloud:functions/principal@1.0.0';
 
 const escapeAttr = (s) =>
   String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /**
- * The end user this invocation serves, or null outside a `session` route.
- * @returns {{sub: string, tenantId: string, orgPath: string, roles: string[], act: object|null}|null}
+ * The end user this invocation serves, or null outside a `session` route. `orgPath` is the home of the
+ * membership the session selected and `roles` the roles the authority projection gives it there;
+ * `membershipId` is that selected membership (#384, ADR-293 decision 9), null when the host answers none.
+ *
+ * The membership's effective authority is the host's answer from the authority projection — the one
+ * evaluator (#384 D105), never recomputed here: `grants` its unexpired grants
+ * ({orgPath, profile: {orgPath, name}, roles, expiresAt: RFC 3339 | null}, read on first use) and
+ * `rolesAt(node)` the roles it holds effectively at `node` (none above or beside its home).
+ * @returns {{sub: string, tenantId: string, orgPath: string, roles: string[], act: object|null,
+ *   membershipId: string|null, grants: Array<{orgPath: string, profile: {orgPath: string, name: string},
+ *   roles: string[], expiresAt: string|null}>, rolesAt: (node: string) => string[]}|null}
  */
 export function principal() {
   const p = current();
   if (!p) return null;
-  return { sub: p.sub, tenantId: p.tenantId, orgPath: p.orgPath, roles: [...p.roles], act: p.act ? JSON.parse(p.act) : null };
+  let grants;
+  return {
+    sub: p.sub,
+    tenantId: p.tenantId,
+    orgPath: p.orgPath,
+    roles: [...p.roles],
+    act: p.act ? JSON.parse(p.act) : null,
+    membershipId: membershipId() ?? null,
+    get grants() {
+      grants ??= wireGrants().map((g) => ({
+        orgPath: g.orgPath,
+        profile: { orgPath: g.profile.orgPath, name: g.profile.name },
+        roles: [...g.roles],
+        expiresAt: g.expiresAt ?? null,
+      }));
+      return grants;
+    },
+    rolesAt: (node) => [...wireRolesAt(node)],
+  };
 }
 
 /** The flash the previous request of this session set (`{}` when none) — the platform clears it. */

@@ -82,6 +82,17 @@ import { resourcePage } from "@aircloudhq/web/react";
 export default resourcePage("pet");
 ```
 
+A resource page declares the surface it renders — `ui.table` for a list, `ui.form` for a record view or a
+form — on the `air-surface` request header, so a field policy can tell a table from a form. The resource
+client writes it (`createResource(resource, { surface: SURFACES.table })`); the pages and the data hooks
+`useList` / `useRecord` pick it for you. It is presentation, never confidentiality: Flex decides every read
+and write.
+
+Which fields a resource page shows is the signed-in user's: each view reads its entity's field schema for its
+surface once (`GET /_air/fields/<entity>`, `useFieldSchema(resource, surface)` in a page of your own) and
+renders only the fields it lists — a field the user may see but not write is rendered disabled and never
+sent. A page that cannot read it renders the projection's fields; Flex still decides every read and write.
+
 Routing inside a page uses the router primitives `@aircloudhq/web/react` re-exports — `Link`, `NavLink`,
 `Routes`, `Route`, `Outlet`, `Navigate`, `useLocation`, `useNavigate`, `useParams`, `useSearchParams` — the
 same React Router instance the `SiteRouter` renders with. Import them from `@aircloudhq/web/react`, never from
@@ -110,6 +121,28 @@ async function methodNotAllowed(request) {
 }
 ```
 
+Your org tree, from your site, with the signed-in end user's own session (`@aircloudhq/web/org`):
+
+```js
+import { memberships, members, orgNodes, profiles, workspaces, SESSION_MEMBERSHIP_REQUIRED } from "@aircloudhq/web/org";
+
+const { memberships: mine, selected } = await memberships.list();   // the membership switcher
+await memberships.select(mine[1].membership_id);                     // act through another, no new login
+const { roles, grants } = await memberships.roles(selected, { node: "/acme/sales" }); // effective there
+const ws = await workspaces.create({ displayName: "Acme" });         // {org_path, membership_id, selected}
+const sales = (await profiles.list({ node: ws.org_path }))[0];
+await members.invite({ email: "bia@example.com", orgPath: ws.org_path, profile: { orgPath: sales.org_path, name: sales.name } });
+const { at, nodes, names } = await orgNodes.homes();                // where a member may be homed: at first
+```
+
+`members`, `profiles`, `groups`, `denies` and `orgNodes` reach the platform's `/_air/members` surface, and the
+platform decides every answer at the caller's node; a refusal rejects with an `ApiError` carrying its code. A
+node is a `node` argument, sent as the `node` query parameter. `orgNodes.homes()` answers the nodes a member may be
+homed at — your acting node `at`, first, and the nodes below it that exist and are not archived — so a form offers
+only those, with `names` — each offered node's display name by path, when it has one (an unnamed node shows its last path segment). `orgNodes.create({ orgPath, displayName })` names a new node and `orgNodes.rename(node, displayName)` renames one. `workspaces.create` answers `selected: false`
+when the workspace was created but the session still acts through its previous membership: send the user to
+the switcher, never retry (a retry creates a second workspace).
+
 ## Modules
 
 | Import | What it carries |
@@ -121,6 +154,8 @@ async function methodNotAllowed(request) {
 | `@aircloudhq/web/helpers/translation` | `t` and `l` |
 | `@aircloudhq/web/i18n` | `createI18n`, the runtime of the locale bundle |
 | `@aircloudhq/web/model` | `modelName` and the model naming helpers |
+| `@aircloudhq/web/resource` | `createResource`, `SURFACES`, `SURFACE_HEADER` |
+| `@aircloudhq/web/org` | `memberships`, `members`, `profiles`, `groups`, `denies`, `orgNodes`, `workspaces` |
 | `@aircloudhq/web/function` | `i18nFor`, for functions |
 | `@aircloudhq/web/csp-nonce` | `cspNonce`; imported for its side effect, below |
 

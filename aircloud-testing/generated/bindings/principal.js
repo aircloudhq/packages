@@ -8,3 +8,6 @@ export const current = bind("principal", "current");
 export const flash = bind("principal", "flash");
 export const setFlash = bind("principal", "set-flash");
 export const csrfToken = bind("principal", "csrf-token");
+export const membershipId = bind("principal", "membership-id");
+export const grants = bind("principal", "grants");
+export const rolesAt = bind("principal", "roles-at");

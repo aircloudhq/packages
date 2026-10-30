@@ -16,3 +16,24 @@ export function query(entity: string, queryJson: string): string;
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
 export function getRecord(entity: string, id: string): string;
+
+/**
+ * flex-query.aggregate-elevated
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function aggregateElevated(entity: string, queryJson: string): string;
+
+/**
+ * flex-query.explain
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function explain(entity: string, explainJson: string): string;
+
+/**
+ * flex-query.policy
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function policy(entity: string, at: string | undefined): string;

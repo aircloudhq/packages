@@ -16,17 +16,25 @@
 // Intl and time-zone behaviour, measured in functions-host (#768 I15), not Node's: no Intl, local time
 // UTC, the Date locale methods' fixed shapes (src/runtime-locale.js).
 //
+// THE ENTRY (#384 D66). A function runs only through an entry its release declares — a [[route]], an event
+// or cron trigger, a direct invoke — and acts at the node the functions-host resolves for that entry before
+// it runs (src/semantics/entries.js). `invoke(entry, request)` names the entry; the function and its module
+// are the release's (the entry model `aircloud test prepare` compiles), never the test's. An entry the
+// release does not declare, or that declares no org_path, resolves to the host's refusal envelope
+// (functions.org_path_undeclared) and the guest never runs.
+//
 // THE CORRELATION ID. Each invocation resolves one correlation id as the host's entry surface does
 // (src/correlation.js, contracts/functions/v1/correlation-v1.json): the caller's x-correlation-id when
 // it is a UUID, else a minted one. The guest's request carries it under that header, replacing the
 // caller's value, and every capability call the invocation makes carries it on `world.calls` and on a
 // refusal's envelope.
 import { pathToFileURL } from "node:url";
-import { isAbsolute, resolve } from "node:path";
 import "../generated/platform-prelude.js";
 import { CORRELATION_HEADER, resolveCorrelationId, withInvocation } from "./correlation.js";
 import { DoubleMisuseError } from "./errors.js";
 import { withRuntimeLocale } from "./runtime-locale.js";
+import { withFrame } from "./semantics/invocation.js";
+import { world } from "./world.js";
 
 let invocation = 0;
 
@@ -59,8 +67,10 @@ async function evaluate(url) {
 }
 
 /**
- * Invoke the function whose entry module is `entry` (a path or file URL) with `request`
- * (a Request, or a URL string). Resolves to the guest's Response.
+ * Invoke the function behind the declared `entry` — { route: prefix }, { function, event: topic, source?,
+ * entity? }, { function, cron: schedule } or { function, orgPath? } (a direct invoke) — with `request` (a
+ * Request, or a URL string). Resolves to the guest's Response, or to the host's refusal envelope when the
+ * entry resolves to no node the host would act at.
  */
 export async function invoke(entry, request) {
   const sent = typeof request === "string" ? new Request(request) : request;
@@ -68,16 +78,26 @@ export async function invoke(entry, request) {
   const correlationId = resolveCorrelationId(sent.headers.get(CORRELATION_HEADER));
   const headers = new Headers(sent.headers);
   headers.set(CORRELATION_HEADER, correlationId);
-  const req = new Request(sent, { headers });
-  return withInvocation(correlationId, () => withRuntimeLocale(() => dispatch(entry, req)));
+  const resolved = await world.entries.resolve(entry, new Request(sent, { headers }));
+  if (resolved.refusal) return refused(resolved.refusal, correlationId);
+  const { module, request: req, frame } = resolved;
+  return withInvocation(correlationId, () => withFrame(frame, () => withRuntimeLocale(() => dispatch(module, req))));
 }
 
-async function dispatch(entry, req) {
-  const url = entry instanceof URL ? new URL(entry.href) : pathToFileURL(isAbsolute(entry) ? entry : resolve(process.cwd(), entry));
+/** The host's answer to an invocation it refused before the guest ran (contracts/functions/v1/errors.json envelope). */
+function refused({ status, code, message, details }, correlationId) {
+  return new Response(JSON.stringify({ error: { code, message, correlation_id: correlationId, details } }), {
+    status,
+    headers: { "content-type": "application/json", [CORRELATION_HEADER]: correlationId },
+  });
+}
+
+async function dispatch(module, req) {
+  const url = pathToFileURL(module);
   url.searchParams.set("air-invocation", String(++invocation));
 
   const listeners = await evaluate(url);
-  if (listeners.length === 0) throw new DoubleMisuseError(`${entry} registers no fetch listener`);
+  if (listeners.length === 0) throw new DoubleMisuseError(`${module} registers no fetch listener`);
 
   let responded = null;
   const event = {

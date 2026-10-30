@@ -13,8 +13,15 @@ export const CONTRACT = deepFreeze({
     "comms-whatsapp",
     "comms-consent",
     "comms-suppression",
+    "org-nodes",
+    "members",
+    "profiles",
+    "groups",
+    "denies",
+    "workspaces",
     "i18n",
-    "principal"
+    "principal",
+    "acting-node"
   ],
   "specifiers": {
     "aircloud:capability/bus@1.0.0": "bus",
@@ -23,16 +30,24 @@ export const CONTRACT = deepFreeze({
     "aircloud:capability/comms-suppression@1.0.0": "comms-suppression",
     "aircloud:capability/comms-whatsapp@1.0.0": "comms-whatsapp",
     "aircloud:capability/credential@1.0.0": "credential",
+    "aircloud:capability/denies@1.0.0": "denies",
     "aircloud:capability/flex-mutate@1.0.0": "flex-mutate",
     "aircloud:capability/flex-query@1.0.0": "flex-query",
     "aircloud:capability/flex-schema@1.0.0": "flex-schema",
+    "aircloud:capability/groups@1.0.0": "groups",
+    "aircloud:capability/members@1.0.0": "members",
+    "aircloud:capability/org-nodes@1.0.0": "org-nodes",
+    "aircloud:capability/profiles@1.0.0": "profiles",
     "aircloud:capability/quota@1.0.0": "quota",
+    "aircloud:capability/workspaces@1.0.0": "workspaces",
+    "aircloud:functions/acting-node@1.0.0": "acting-node",
     "aircloud:functions/i18n@1.0.0": "i18n",
     "aircloud:functions/principal@1.0.0": "principal"
   },
   "runtime": [
     "i18n",
-    "principal"
+    "principal",
+    "acting-node"
   ],
   "wit": {
     "package": "aircloud:capability",
@@ -127,6 +142,102 @@ export const CONTRACT = deepFreeze({
                 "type": {
                   "kind": "prim",
                   "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "aggregate-elevated",
+            "params": [
+              {
+                "name": "entity",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "query-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "explain",
+            "params": [
+              {
+                "name": "entity",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "explain-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "policy",
+            "params": [
+              {
+                "name": "entity",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "at",
+                "type": {
+                  "kind": "option",
+                  "of": {
+                    "kind": "prim",
+                    "name": "string"
+                  }
                 }
               }
             ],
@@ -455,6 +566,253 @@ export const CONTRACT = deepFreeze({
               },
               {
                 "name": "patch-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "put-policy",
+            "params": [
+              {
+                "name": "policies-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "delete-policy",
+            "params": [
+              {
+                "name": "id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "create-changeset",
+            "params": [
+              {
+                "name": "changeset-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "get-changeset",
+            "params": [
+              {
+                "name": "id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "update-changeset",
+            "params": [
+              {
+                "name": "id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "patch-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "discard-changeset",
+            "params": [
+              {
+                "name": "id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "diff-changeset",
+            "params": [
+              {
+                "name": "id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "changeset-impact",
+            "params": [
+              {
+                "name": "id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "publish-changeset",
+            "params": [
+              {
+                "name": "id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "create-rollback",
+            "params": [
+              {
+                "name": "rollback-json",
                 "type": {
                   "kind": "prim",
                   "name": "string"
@@ -1529,6 +1887,672 @@ export const CONTRACT = deepFreeze({
         ]
       },
       {
+        "name": "org-nodes",
+        "types": {},
+        "functions": [
+          {
+            "name": "list-nodes",
+            "params": [],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "create-node",
+            "params": [
+              {
+                "name": "node-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "archive-node",
+            "params": [
+              {
+                "name": "node",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "unarchive-node",
+            "params": [
+              {
+                "name": "node",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "delete-node",
+            "params": [
+              {
+                "name": "node",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "members",
+        "types": {},
+        "functions": [
+          {
+            "name": "list-members",
+            "params": [
+              {
+                "name": "under",
+                "type": {
+                  "kind": "option",
+                  "of": {
+                    "kind": "prim",
+                    "name": "string"
+                  }
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "invite",
+            "params": [
+              {
+                "name": "member-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "update",
+            "params": [
+              {
+                "name": "user-id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "patch-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "remove",
+            "params": [
+              {
+                "name": "user-id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "block",
+                "type": {
+                  "kind": "prim",
+                  "name": "bool"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "unblock",
+            "params": [
+              {
+                "name": "email",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "grant",
+            "params": [
+              {
+                "name": "user-id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "grant-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "revoke-grant",
+            "params": [
+              {
+                "name": "user-id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "grant-id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "memberships",
+            "params": [
+              {
+                "name": "user-id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "profiles",
+        "types": {},
+        "functions": [
+          {
+            "name": "list-profiles",
+            "params": [
+              {
+                "name": "at",
+                "type": {
+                  "kind": "option",
+                  "of": {
+                    "kind": "prim",
+                    "name": "string"
+                  }
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "put",
+            "params": [
+              {
+                "name": "node",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "name",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "profile-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "remove",
+            "params": [
+              {
+                "name": "node",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "name",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "groups",
+        "types": {},
+        "functions": [
+          {
+            "name": "list-groups",
+            "params": [],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "put",
+            "params": [
+              {
+                "name": "group-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "remove",
+            "params": [
+              {
+                "name": "node",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "name",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "add-member",
+            "params": [
+              {
+                "name": "node",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "name",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "member-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "remove-member",
+            "params": [
+              {
+                "name": "node",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "name",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "membership-id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "denies",
+        "types": {},
+        "functions": [
+          {
+            "name": "list-denies",
+            "params": [],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "put",
+            "params": [
+              {
+                "name": "deny-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "remove",
+            "params": [
+              {
+                "name": "deny-id",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "workspaces",
+        "types": {},
+        "functions": [
+          {
+            "name": "create",
+            "params": [
+              {
+                "name": "workspace-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "prim",
+                "name": "string"
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          }
+        ]
+      },
+      {
         "name": "i18n",
         "types": {},
         "functions": [
@@ -1642,6 +2666,65 @@ export const CONTRACT = deepFreeze({
                 }
               }
             ]
+          },
+          "profile-ref": {
+            "kind": "record",
+            "fields": [
+              {
+                "name": "org-path",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "name",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ]
+          },
+          "grant": {
+            "kind": "record",
+            "fields": [
+              {
+                "name": "org-path",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "profile",
+                "type": {
+                  "kind": "named",
+                  "iface": "principal",
+                  "name": "profile-ref"
+                }
+              },
+              {
+                "name": "roles",
+                "type": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "prim",
+                    "name": "string"
+                  }
+                }
+              },
+              {
+                "name": "expires-at",
+                "type": {
+                  "kind": "option",
+                  "of": {
+                    "kind": "prim",
+                    "name": "string"
+                  }
+                }
+              }
+            ]
           }
         },
         "functions": [
@@ -1699,6 +2782,99 @@ export const CONTRACT = deepFreeze({
                 "name": "string"
               }
             }
+          },
+          {
+            "name": "membership-id",
+            "params": [],
+            "result": {
+              "kind": "option",
+              "of": {
+                "kind": "prim",
+                "name": "string"
+              }
+            }
+          },
+          {
+            "name": "grants",
+            "params": [],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "list",
+                "of": {
+                  "kind": "named",
+                  "iface": "principal",
+                  "name": "grant"
+                }
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          },
+          {
+            "name": "roles-at",
+            "params": [
+              {
+                "name": "node",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": {
+                "kind": "list",
+                "of": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "acting-node",
+        "types": {},
+        "functions": [
+          {
+            "name": "current",
+            "params": [],
+            "result": {
+              "kind": "prim",
+              "name": "string"
+            }
+          },
+          {
+            "name": "narrow",
+            "params": [
+              {
+                "name": "path",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              }
+            ],
+            "result": {
+              "kind": "result",
+              "ok": null,
+              "err": {
+                "kind": "named",
+                "iface": "cap-types",
+                "name": "error-envelope"
+              }
+            }
           }
         ]
       }
@@ -1715,20 +2891,58 @@ export const CONTRACT = deepFreeze({
     "credential.egress": "credential.egress",
     "credential.hmac-sign": "credential.hmac",
     "credential.hmac-verify": "credential.hmac",
+    "denies.list-denies": "denies.list",
+    "denies.put": "denies.put",
+    "denies.remove": "denies.remove",
     "flex-mutate.create-record": "flex.mutate",
     "flex-mutate.delete-record": "flex.mutate",
     "flex-mutate.update-record": "flex.mutate",
+    "flex-query.aggregate-elevated": "flex.query",
+    "flex-query.explain": "flex.query",
     "flex-query.get-record": "flex.query",
+    "flex-query.policy": "flex.query",
     "flex-query.query": "flex.query",
     "flex-schema.add-field": "flex.schema",
+    "flex-schema.changeset-impact": "flex.schema",
+    "flex-schema.create-changeset": "flex.schema",
     "flex-schema.create-entity": "flex.schema",
+    "flex-schema.create-rollback": "flex.schema",
     "flex-schema.delete-entity": "flex.schema",
+    "flex-schema.delete-policy": "flex.schema",
+    "flex-schema.diff-changeset": "flex.schema",
+    "flex-schema.discard-changeset": "flex.schema",
+    "flex-schema.get-changeset": "flex.schema",
     "flex-schema.get-entity": "flex.schema",
     "flex-schema.list-entities": "flex.schema",
+    "flex-schema.publish-changeset": "flex.schema",
+    "flex-schema.put-policy": "flex.schema",
     "flex-schema.remove-field": "flex.schema",
+    "flex-schema.update-changeset": "flex.schema",
     "flex-schema.update-entity": "flex.schema",
     "flex-schema.update-field": "flex.schema",
-    "quota.check": "quota.check"
+    "groups.add-member": "groups.add_member",
+    "groups.list-groups": "groups.list",
+    "groups.put": "groups.put",
+    "groups.remove": "groups.remove",
+    "groups.remove-member": "groups.remove_member",
+    "members.grant": "members.grant",
+    "members.invite": "members.invite",
+    "members.list-members": "members.list",
+    "members.memberships": "members.memberships",
+    "members.remove": "members.remove",
+    "members.revoke-grant": "members.revoke_grant",
+    "members.unblock": "members.unblock",
+    "members.update": "members.update",
+    "org-nodes.archive-node": "nodes.archive",
+    "org-nodes.create-node": "nodes.create",
+    "org-nodes.delete-node": "nodes.delete",
+    "org-nodes.list-nodes": "nodes.list",
+    "org-nodes.unarchive-node": "nodes.unarchive",
+    "profiles.list-profiles": "profiles.list",
+    "profiles.put": "profiles.put",
+    "profiles.remove": "profiles.remove",
+    "quota.check": "quota.check",
+    "workspaces.create": "workspaces.create"
   },
   "capabilities": {
     "bus.publish": {
@@ -1767,6 +2981,18 @@ export const CONTRACT = deepFreeze({
       "effect": "none",
       "sandboxMode": null
     },
+    "denies.list": {
+      "effect": "none",
+      "sandboxMode": null
+    },
+    "denies.put": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "denies.remove": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
     "flex.mutate": {
       "effect": "tenant-data",
       "sandboxMode": null
@@ -1779,8 +3005,96 @@ export const CONTRACT = deepFreeze({
       "effect": "tenant-data",
       "sandboxMode": null
     },
+    "groups.add_member": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "groups.list": {
+      "effect": "none",
+      "sandboxMode": null
+    },
+    "groups.put": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "groups.remove": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "groups.remove_member": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "members.grant": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "members.invite": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "members.list": {
+      "effect": "none",
+      "sandboxMode": null
+    },
+    "members.memberships": {
+      "effect": "none",
+      "sandboxMode": null
+    },
+    "members.remove": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "members.revoke_grant": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "members.unblock": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "members.update": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "nodes.archive": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "nodes.create": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "nodes.delete": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "nodes.list": {
+      "effect": "none",
+      "sandboxMode": null
+    },
+    "nodes.unarchive": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "profiles.list": {
+      "effect": "none",
+      "sandboxMode": null
+    },
+    "profiles.put": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
+    "profiles.remove": {
+      "effect": "tenant-data",
+      "sandboxMode": null
+    },
     "quota.check": {
       "effect": "none",
+      "sandboxMode": null
+    },
+    "workspaces.create": {
+      "effect": "tenant-data",
       "sandboxMode": null
     }
   },
@@ -1792,9 +3106,12 @@ export const CONTRACT = deepFreeze({
     "capability.forbidden",
     "capability.header_conflict",
     "capability.internal",
+    "capability.membership_required",
     "capability.not_found",
+    "capability.org_node_archived",
     "capability.payload_too_large",
     "capability.request_timeout",
+    "capability.resolver_unavailable",
     "capability.timeout",
     "capability.unauthenticated",
     "capability.unsupported_media_type",
@@ -1806,26 +3123,32 @@ export const CONTRACT = deepFreeze({
     "comms.identity_unresolved",
     "comms.internal",
     "comms.latency_tier_immature",
+    "comms.membership_required",
     "comms.not_found",
+    "comms.org_node_archived",
     "comms.payload_too_large",
     "comms.quota_exceeded",
     "comms.rail_error",
     "comms.recipient_consent_absent",
     "comms.recipient_suppressed",
     "comms.request_timeout",
+    "comms.resolver_unavailable",
     "comms.risk_tier_undeclared",
     "comms.send_admission_withheld",
     "comms.sending_halted",
     "comms.unauthenticated",
     "comms.validation",
+    "flex.changeset_not_draft",
     "flex.complexity_cap",
     "flex.environment_required",
     "flex.forbidden",
     "flex.immutable_field",
     "flex.internal",
+    "flex.membership_required",
     "flex.migration_contracting",
     "flex.name_conflict",
     "flex.not_found",
+    "flex.org_node_archived",
     "flex.quota_exhausted",
     "flex.rate_limited",
     "flex.resolver_unavailable",
@@ -1850,8 +3173,11 @@ export const CONTRACT = deepFreeze({
     "functions.invocation_filter_unknown",
     "functions.invoke_outcome_unknown",
     "functions.locale_bundle_unresolvable",
+    "functions.membership_required",
     "functions.memory_exceeded",
     "functions.not_found",
+    "functions.org_node_archived",
+    "functions.org_path_undeclared",
     "functions.payload_too_large",
     "functions.quota_exhausted",
     "functions.resolver_unavailable",
@@ -1869,6 +3195,7 @@ export const CONTRACT = deepFreeze({
     "deploy.database.create",
     "deploy.database.fork",
     "deploy.site.egress_bytes",
+    "flex.aggregate.elevated",
     "flex.entity.create",
     "flex.entity.delete",
     "flex.entity.update",
@@ -1903,6 +3230,9 @@ export const CONTRACT = deepFreeze({
       "hard_block",
       "allow_overage",
       "warn_upgrade"
+    ],
+    "flex.aggregate.elevated": [
+      "hard_block"
     ],
     "flex.entity.create": [
       "hard_block"
@@ -1968,6 +3298,200 @@ export const CONTRACT = deepFreeze({
   "flexQueryLimit": {
     "minimum": 1,
     "maximum": 200
+  },
+  "hostAssertion": {
+    "kinds": [
+      "end_user",
+      "node",
+      "elevation"
+    ],
+    "claimKinds": {
+      "act": [
+        "end_user",
+        "elevation"
+      ],
+      "aud": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "causation_id": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "correlation_id": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "entity": [
+        "elevation"
+      ],
+      "entry_org_path": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "environment": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "exp": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "fields": [
+        "elevation"
+      ],
+      "filter": [
+        "elevation"
+      ],
+      "function": [
+        "elevation"
+      ],
+      "group_by": [
+        "elevation"
+      ],
+      "iat": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "iss": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "kind": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "membership_id": [
+        "end_user",
+        "elevation"
+      ],
+      "ops": [
+        "elevation"
+      ],
+      "org_path": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "runtime_sub": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "scope": [
+        "elevation"
+      ],
+      "sub": [
+        "end_user",
+        "elevation"
+      ],
+      "surface": [
+        "end_user",
+        "node",
+        "elevation"
+      ],
+      "tenant_id": [
+        "end_user",
+        "node",
+        "elevation"
+      ]
+    },
+    "retiredClaims": [
+      "roles"
+    ],
+    "aggregateFns": [
+      "count",
+      "sum",
+      "avg",
+      "min",
+      "max"
+    ],
+    "elevationScopes": [
+      "node",
+      "subtree"
+    ],
+    "surfaces": [
+      "api",
+      "mcp",
+      "ui.form",
+      "ui.table",
+      "import"
+    ]
+  },
+  "fieldPolicy": {
+    "policyReads": [
+      "record",
+      "actor.roles",
+      "actor.sub",
+      "actor.org_path",
+      "env.now",
+      "surface"
+    ],
+    "effects": [
+      "visible",
+      "writable",
+      "required"
+    ],
+    "combinators": [
+      "and",
+      "or"
+    ],
+    "actorOps": {
+      "actor.org_path": [
+        "eq",
+        "neq",
+        "in"
+      ],
+      "actor.roles": [
+        "contains"
+      ],
+      "actor.sub": [
+        "eq",
+        "neq",
+        "in"
+      ]
+    },
+    "envNowOps": [
+      "lt",
+      "lte",
+      "gt",
+      "gte"
+    ],
+    "surfaceOps": [
+      "eq",
+      "in"
+    ],
+    "surfaces": [
+      "api",
+      "mcp",
+      "ui.form",
+      "ui.table",
+      "import"
+    ],
+    "unboundEffects": {
+      "import": [
+        "visible",
+        "writable"
+      ]
+    },
+    "maxDepth": 4,
+    "maxPredicates": 32,
+    "envNowQuantumSeconds": 60
+  },
+  "invitationExpirySeconds": 604800,
+  "orgNodeName": {
+    "minLength": 1,
+    "maxLength": 100,
+    "pattern": "^[^\\p{Cc}\\p{Z}](?:[^\\p{Cc}]*[^\\p{Cc}\\p{Z}])?$"
   }
 });
 

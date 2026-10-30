@@ -5,7 +5,7 @@
 import { createContext, createElement as h, useContext, useMemo, useSyncExternalStore } from 'react';
 import { createForm, fullMessage, submitLabel } from '../helpers/form.js';
 import { humanAttributeName } from '../model.js';
-import { recordLabel } from '../resource.js';
+import { recordLabel, SURFACES } from '../resource.js';
 import { useI18n } from './i18n.js';
 import { useSite } from './router.js';
 import { useList } from './data.js';
@@ -55,6 +55,8 @@ function inputProps(name, type) {
     value: state.values[name],
     onChange: (e) => form.set(name, e.target.value),
     type,
+    // A field the session may see but not write (#384 D104): shown, never edited, never sent.
+    disabled: field.read_only ? true : undefined,
     'aria-invalid': (state.errors[name] ?? []).length ? 'true' : undefined,
   };
 }
@@ -86,6 +88,7 @@ export function BooleanField({ name }) {
       id: `${form.resource.entity}_${name}`,
       name,
       type: 'checkbox',
+      disabled: form.fields.find((f) => f.name === name)?.read_only ? true : undefined,
       checked: Boolean(state.values[name]),
       onChange: (e) => form.set(name, e.target.checked),
     }),
@@ -106,7 +109,7 @@ export function RelationField({ name }) {
   const field = form.fields.find((f) => f.name === name);
   const target = field?.relation ? projection?.resources?.[field.relation.target] : undefined;
   // The related resource's records (one Flex page, its maximum), through the same hook a page lists with.
-  const { records: options } = useList(target?.route_prefix ? target : null, { limit: RELATION_OPTIONS_LIMIT });
+  const { records: options } = useList(target?.route_prefix ? target : null, { limit: RELATION_OPTIONS_LIMIT, surface: SURFACES.form });
   const props = inputProps(name, undefined);
   delete props.type;
   return h(Field, {

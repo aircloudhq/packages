@@ -58,3 +58,73 @@ export function removeField(entity: string, field: string): string;
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
 export function updateEntity(name: string, patchJson: string): string;
+
+/**
+ * flex-schema.put-policy
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function putPolicy(policiesJson: string): string;
+
+/**
+ * flex-schema.delete-policy
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function deletePolicy(id: string): string;
+
+/**
+ * flex-schema.create-changeset
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function createChangeset(changesetJson: string): string;
+
+/**
+ * flex-schema.get-changeset
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function getChangeset(id: string): string;
+
+/**
+ * flex-schema.update-changeset
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function updateChangeset(id: string, patchJson: string): string;
+
+/**
+ * flex-schema.discard-changeset
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function discardChangeset(id: string): string;
+
+/**
+ * flex-schema.diff-changeset
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function diffChangeset(id: string): string;
+
+/**
+ * flex-schema.changeset-impact
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function changesetImpact(id: string): string;
+
+/**
+ * flex-schema.publish-changeset
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function publishChangeset(id: string): string;
+
+/**
+ * flex-schema.create-rollback
+ *
+ * @throws {ComponentError} whose `payload` is the error-envelope
+ */
+export function createRollback(rollbackJson: string): string;

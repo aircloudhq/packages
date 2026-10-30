@@ -10,19 +10,26 @@
 // One environment's data per world: the double stands in for the environment the function under
 // test runs in (ADR-111 isolates environments by data, and a unit test runs in one).
 //
-// WHO ACTS, AND WHERE (ADR-257). Every call resolves its acting principal through the one resolution
-// (./acting.js): the bearer the function's Flex calls carry — `world.flex.bearer`, the function runtime's
-// service account at `/` unless a test sets another — and, for an invocation serving a signed-in end user
-// (`world.principal.signIn`), the host's end-user assertion. The session runs at the acting end user's node
-// (decision 7), else the bearer's. Records are stored at the session's node; a session reads its node and
+// WHO ACTS, AND WHERE (ADR-257, as amended by ADR-293 and ADR-295). Every call resolves its acting
+// principal through the one resolution (./acting.js): the bearer the function's Flex calls carry —
+// `world.flex.bearer`, the function runtime's service account unless a test sets another — and the host's
+// assertion (./acting-node.js `hostAssertion`): kind end_user for a signed-in end user
+// (`world.principal.signIn`), kind node for a declared entry (`world.actingNode.enter`), kind elevation for
+// one declared elevated aggregate. Authority — roles, the bearer's node, denies — is read from the
+// authority projection (`world.projection`), never from a token or an assertion; an end user's roles are
+// those effective AT EACH RECORD'S NODE (owner bypass, write_roles and field policy read them there, #384
+// AC7), and an op-deny binding a node refuses every actor at or below it (flex.forbidden, D19). The
+// session runs at the acting node. Records are stored at the session's node; a session reads its node and
 // below, plus the rows of a `shared` entity stored at a strict ancestor (SELECT only). An entity declaring
 // `owner` scopes an acting end user without a bypass role to the records it owns (decision 4): create forces
 // the owner to its sub, changing the owner is flex.forbidden, another's record is flex.not_found. An edge
 // is visible when its source's row is, and, to an acting end user, only when both endpoints are. An entity
 // declaring `write_roles` (ADR-279) refuses a create, update or delete by an acting end user holding none of
-// the operation's roles with flex.role_required, before any record is read; the tenant is never checked. The
-// behaviour is the shared vectors' (contracts/flex/v1/{owner-policy,org-scope,acting-principal,write-roles}-
-// vectors.json, test/flex_owner_vectors.test.mjs).
+// the operation's roles with flex.role_required — an upper bound below the acting node before any record
+// is read, the exact check at the record's node after (D41); the tenant is never checked. Field policy
+// (ADR-294, ./field-policy.js) hides, freezes and requires fields per row. The behaviour is the shared
+// vectors' (contracts/flex/v1/{owner-policy,org-scope,acting-principal,write-roles,field-policy,
+// elevated-aggregate}-vectors.json, test/flex_owner_vectors.test.mjs and test/flex_policy_vectors.test.mjs).
 import { CapabilityFailure, DoubleMisuseError } from "../errors.js";
 import { admit } from "./quota.js";
 import {
@@ -31,7 +38,12 @@ import {
 } from "./flex-values.js";
 import { dateAt, parseZone, ZONE_NAME_RE } from "./flex-zone.js";
 import { parseQuery, runQuery } from "./flex-query.js";
-import { atOrBelow, resolveActingPrincipal } from "./acting.js";
+import { invocationClaims, parseHostAssertion, resolveActingPrincipal } from "./acting.js";
+import { checkElevated, RECORD_ID_FIELD, validOrgPath } from "./acting-node.js";
+import { atOrBelow, denied, rolesAt, rolesReachableBelow, RUNTIME_SUB } from "./authz.js";
+import {
+  bindingRules, checkWrite, hiddenFields, parseRule, quantizedNow, queryTerms, refuseHiddenTerms, ruleReads, rulesAt,
+} from "./field-policy.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PRODUCT_SCHEMA_WRITER, productRoot, productSchemaFile } from "./i18n.js";
@@ -51,7 +63,21 @@ export const FLEX_METERS = {
   fieldCreate: "flex.field.create",
   fieldUpdate: "flex.field.update",
   fieldDelete: "flex.field.delete",
+  aggregateElevated: "flex.aggregate.elevated",
 };
+
+/**
+ * The compiled-artifact schema version the policy read answers (#384 D102/D112): a declared lockstep
+ * mirror of flex/src/policy.rs ARTIFACT_SCHEMA_VERSION, held equal by test/flex_policy_read.test.mjs.
+ */
+export const POLICY_ARTIFACT_SCHEMA_VERSION = 1;
+
+/**
+ * The scope explain's and the policy read's bound needs for a node other than the acting node (ADR-293
+ * decision 10; flex/src/explain.rs require_bound, crate::scopes_gen::SCOPE_TENANT_ORG): a declared
+ * lockstep mirror, held to contracts/auth/v1/scope-registry.json by test/flex_policy_read.test.mjs.
+ */
+export const POLICY_BOUND_SCOPE = "tenant:org";
 
 function notFound(message) {
   return new CapabilityFailure("flex.not_found", message, {});
@@ -88,17 +114,16 @@ function parseWriteRoles(name, w) {
   return out;
 }
 
-function unauthenticated(message) {
-  return new CapabilityFailure("flex.unauthenticated", message, {});
-}
-
 /** `node` is a strict ancestor of `of`. */
 function strictAncestor(node, of) {
   return node !== of && atOrBelow(of, node);
 }
 
-/** The bearer a function's Flex calls carry: the function runtime's service account at the root (ADR-242). */
-export const RUNTIME_BEARER = Object.freeze({ plane: "service", sub: "function-runtime", roles: null, org_path: "/" });
+/**
+ * The bearer a function's Flex calls carry: the function runtime's service account (ADR-242) — identity
+ * only; its node is its projection key's (world.projection places it at `/`).
+ */
+export const RUNTIME_BEARER = Object.freeze({ plane: "service", sub: RUNTIME_SUB });
 
 function nameConflict() {
   return new CapabilityFailure("flex.name_conflict", "a live record with that name already exists", {});
@@ -165,37 +190,106 @@ export function createFlexState(world) {
   const entities = new Map(); // live entities by name
   const records = new Map(); // tenant-wide live records by id: { id, entityId, data, orgPath, key }
 
-  /** The request's session: its node and, when one acts, the end user (ADR-257 decisions 2, 7). */
+  /** The elevation declaration the current Flex calls are signed under (one elevated call), or null. */
+  let elevating = null;
+
+  /**
+   * The request's session (ADR-257 decisions 2, 7, 8, as amended by ADR-293 decisions 7 to 9 and ADR-295
+   * decisions 3 and 4): the host-signed assertion the call carries — none for an invocation with neither a
+   * session nor a declared entry — verified and resolved against the projection beside the bearer. Its
+   * acting node, the acting end user (when one acts), the acting sub, the authority read from the
+   * projection, and the verified elevation.
+   */
   function session() {
-    const p = world.principal.current();
-    const assertion = p ? { sub: p.sub, roles: p.roles, org_path: p.orgPath, act: p.act ?? null } : null;
-    const acting = resolveActingPrincipal(state.bearer, assertion);
-    if (acting.acting === "end_user" && acting.source === "assertion" && !atOrBelow(acting.org_path, state.bearer.org_path)) {
-      throw unauthenticated("end-user assertion: org_path is outside the bearer's node");
-    }
-    return { node: acting.org_path, endUser: acting.acting === "end_user" ? { sub: acting.sub, roles: acting.roles } : null };
+    const claims = world.actingNode.hostAssertion(elevating);
+    const invocation = claims === null ? null : invocationClaims(claims, world.contract.hostAssertion);
+    const assertion = claims === null ? null : parseHostAssertion(claims, world.contract.hostAssertion);
+    const acting = resolveActingPrincipal(state.bearer, assertion, state.bearer.membership ?? null, world.projection.view(), world.clock.nowMs());
+    return {
+      // #384 D82: the request surface is the verified assertion's; a call carrying none is `api`.
+      surface: invocation?.surface ?? "api",
+      node: acting.org_path,
+      endUser: acting.acting === "end_user" ? { sub: acting.sub } : null,
+      sub: acting.sub,
+      authority: acting.authority,
+      elevation: acting.elevation ?? null,
+    };
   }
-  /** The end user this entity's owner policy scopes in session `s`, or null (no owner, tenant, bypass). */
-  function ownerScope(e, s) {
+  /** The roles an acting END USER holds at `node` (a record's node, #384 AC7); none for the tenant. */
+  function endUserRoles(s, node) {
+    return s.endUser ? rolesAt(s.authority, node) : [];
+  }
+  /** The end user this entity's owner policy scopes in session `s` at `node`, or null (no owner, tenant, bypass). */
+  function ownerScope(e, s, node) {
     if (!e.owner || !s.endUser) return null;
-    if (s.endUser.roles.some((r) => e.ownerBypassRoles.includes(r))) return null;
+    if (endUserRoles(s, node).some((r) => e.ownerBypassRoles.includes(r))) return null;
     return s.endUser.sub;
   }
-  /** ADR-279 decision 3 (the executor's check): an acting end user holds one of `operation`'s roles. */
-  function requireWriteRole(e, operation, s) {
+  /** ADR-279 decision 3 at the record's node: an acting end user holds one of `operation`'s roles there. */
+  function requireWriteRole(e, operation, s, node) {
     const required = e.writeRoles?.[operation] ?? [];
-    if (!s.endUser || required.length === 0 || s.endUser.roles.some((r) => required.includes(r))) return;
+    if (!s.endUser || required.length === 0 || endUserRoles(s, node).some((r) => required.includes(r))) return;
     throw roleRequired(e.name, operation, required);
   }
+  /** D19: an op-deny binding `node` for `op` on `e` refuses every actor at or below its node (flex.forbidden). */
+  function requireNotDenied(e, s, op, node) {
+    if (denied(s.authority, node, op, e.name)) throw forbidden(`${op} on '${e.name}' is denied at ${node} (deny.op)`);
+  }
+  /**
+   * The checks of an update or delete BEFORE its record is looked up (ADR-279 decision 3, #384 D41), at the
+   * acting node: a deny binding it, and an end user holding none of the operation's roles anywhere at or
+   * below it. The exact checks at the record's node follow the lookup (requireWriteAt).
+   */
+  function requireWriteReachable(e, operation, s) {
+    requireNotDenied(e, s, `entity.${operation}`, s.node);
+    const required = e.writeRoles?.[operation] ?? [];
+    if (!s.endUser || required.length === 0) return;
+    const reachable = rolesReachableBelow(s.authority, s.node);
+    if (!required.some((r) => reachable.has(r))) throw roleRequired(e.name, operation, required);
+  }
+  /** The executor's write checks at the record's node, in their one order: denies, then write_roles. */
+  function requireWriteAt(e, operation, s, node) {
+    requireNotDenied(e, s, `entity.${operation}`, node);
+    requireWriteRole(e, operation, s, node);
+  }
   function ownerAdmits(e, r, s) {
-    const sub = ownerScope(e, s);
+    const sub = ownerScope(e, s, r.orgPath);
     return sub === null || r.data[e.owner] === sub;
   }
-  /** A row `s` reads: its node and below, a shared entity's strict-ancestor rows, the owner policy. */
+  /** A row `s` reads: its node and below, a shared entity's strict-ancestor rows, the owner policy, no read deny. */
   function readable(r, s) {
     const e = entityById(r.entityId);
     const placed = atOrBelow(r.orgPath, s.node) || (e.shared && strictAncestor(r.orgPath, s.node));
-    return placed && ownerAdmits(e, r, s);
+    return placed && ownerAdmits(e, r, s) && !denied(s.authority, r.orgPath, "entity.read", e.name);
+  }
+  // ── field policy (ADR-294) ──────────────────────────────────────────────────────────────
+  /** The rules governing a row of `e` at `node` (its chain's: base first, then each overlay root-down). */
+  function policyAt(e, node) {
+    return rulesAt(world.contract.fieldPolicy, e.policy, liveFields(e), node, validOrgPath);
+  }
+  /** The rules of `e` at `node` that bind session `s`'s surface (#384 D117: `import` is bound by required alone). */
+  function boundPolicyAt(e, node, s) {
+    return bindingRules(world.contract.fieldPolicy, policyAt(e, node), s.surface);
+  }
+  /** What a rule decides over: `data` at `node`, for session `s` (actor.roles effective at that node). */
+  function policyCtx(s, node, data) {
+    return {
+      data, roles: rolesAt(s.authority, node), sub: s.sub, orgPath: s.node, surface: s.surface,
+      nowQ: quantizedNow(world.contract.fieldPolicy, world.clock.nowMs()),
+    };
+  }
+  /** Row `r` as session `s` may see it: the fields its node's rules hide omitted, and named. */
+  function seen(e, r, s) {
+    const hidden = hiddenFields(boundPolicyAt(e, r.orgPath, s), policyCtx(s, r.orgPath, r.data));
+    const data = Object.fromEntries(Object.entries(r.data).filter(([k]) => !hidden.has(k)));
+    return { id: r.id, data, hidden };
+  }
+  /** The fields a write CHANGES, as JSONB values: a set value differing from the stored one, a cleared present one. */
+  function changedFields(stored, set, clear) {
+    const out = new Set();
+    for (const [k, v] of Object.entries(set)) if (JSON.stringify(jsonbForm(v)) !== JSON.stringify(stored[k] ?? null)) out.add(k);
+    for (const k of clear) if (stored[k] !== undefined && stored[k] !== null) out.add(k);
+    return out;
   }
   /** A row `s` writes: its node and below only (a shared ancestor row stays read-only), the owner policy. */
   function writable(r, s) {
@@ -397,39 +491,100 @@ export function createFlexState(world) {
 
   const state = {
     // ── the WIT surface (called by the binder) ──────────────────────────────────────────
+    /**
+     * POST /v1/entities/{e}/query. A read deny binding the acting node refuses (flex.forbidden). Under an
+     * elevation assertion (ADR-295 decision 8) an aggregate on the declared entity is the ONE lifted
+     * statement — inside its declaration (flex.forbidden naming the role and value otherwise), its owner
+     * scope lifted over the records AT the acting node (`scope: node`) or in its subtree (`subtree`);
+     * every other statement runs under the base kind. A term on a field a base-layer rule hides for the
+     * whole request is refused (flex.forbidden naming the rule); every other hidden value is folded per
+     * row (ADR-294 decision 5).
+     */
     query(entityName, queryJson) {
       const body = parseBody(queryJson);
       const s = session();
       const e = resolveEntity(entityName, s);
       const q = parseQuery(liveFields(e), body, world.contract.flexQueryLimit);
+      requireNotDenied(e, s, "entity.read", s.node);
+      const lifted = s.elevation !== null && q.aggregate !== null && s.elevation.entity === e.name;
+      if (lifted) {
+        const identifiers = [RECORD_ID_FIELD, ...(e.owner ? [e.owner] : [])];
+        const { refusal } = checkElevated([s.elevation], e.name, body, identifiers);
+        if (refusal) {
+          throw new CapabilityFailure("flex.forbidden", `the elevated aggregate is outside its declaration (${refusal.role} ${JSON.stringify(refusal.value)})`, {
+            elevation: { entity: e.name, role: refusal.role, value: refusal.value },
+          });
+        }
+      }
+      refuseHiddenTerms(boundPolicyAt(e, "/", s), queryTerms(q), policyCtx(s, s.node, {}));
       admit(world, FLEX_METERS.query, 1, "flex");
-      return JSON.stringify(runQuery(q, recordsOf(e, s)));
+      let rows;
+      if (lifted) {
+        admit(world, FLEX_METERS.aggregateElevated, 1, "flex");
+        const scope = s.elevation.scope;
+        rows = [...records.values()].filter((r) => r.entityId === e.id
+          && (scope === "node" ? r.orgPath === s.node : atOrBelow(r.orgPath, s.node))
+          && !denied(s.authority, r.orgPath, "entity.read", e.name));
+      } else {
+        rows = recordsOf(e, s);
+      }
+      return JSON.stringify(runQuery(q, rows.map((r) => seen(e, r, s))));
+    },
+    /**
+     * ADR-295 decision 8, the host's half (functions/src/caps_flex.rs aggregate_elevated): the call must
+     * stay inside one of the function's `[[elevate]]` declarations (capability.forbidden naming the role
+     * and value, before Flex is called); inside it, the query carries an elevation assertion signed for it
+     * alone, and Flex runs it lifted.
+     */
+    aggregateElevated(entityName, queryJson) {
+      const body = parseBody(queryJson);
+      const e = resolveEntity(entityName);
+      const identifiers = [RECORD_ID_FIELD, ...(e.owner ? [e.owner] : [])];
+      const { decl, refusal } = checkElevated(world.actingNode.elevations(), entityName, body, identifiers);
+      if (refusal) {
+        throw new CapabilityFailure(
+          "capability.forbidden",
+          `the elevated aggregate is outside this function's [[elevate]] declaration (${refusal.role} ${JSON.stringify(refusal.value)})`,
+          { elevation: { entity: entityName, role: refusal.role, value: refusal.value } },
+        );
+      }
+      return state.underElevation(decl, () => state.query(entityName, queryJson));
     },
     getRecord(entityName, id) {
       const rid = parseUuid(id);
       if (rid === null) throw notFound("record not found");
       const s = session();
       const e = resolveEntity(entityName, s);
+      requireNotDenied(e, s, "entity.read", s.node);
       const r = records.get(rid);
       if (!r || r.entityId !== e.id || !readable(r, s)) throw notFound("record not found");
-      return JSON.stringify(serializeRecord(e, r));
+      return JSON.stringify(serializeRecord(e, seen(e, r, s)));
     },
     createRecord(entityName, recordJson) {
       const body = parseBody(recordJson);
       const s = session();
       const e = resolveEntity(entityName, s);
-      const created = validateCreate(liveFields(e), recordData(body));
-      requireWriteRole(e, "create", s);
-      admit(world, FLEX_METERS.recordCreate, 1, "flex");
+      const submitted = recordData(body);
+      const created = validateCreate(liveFields(e), submitted);
+      requireWriteAt(e, "create", s, s.node);
+      // ADR-294 decision 5: on create, any value other than absent or the field's declared default is a
+      // change, judged over the submitted row; `required` over the row the write produces.
+      const given = Object.fromEntries(Object.keys(submitted).filter((k) => submitted[k] !== null).map((k) => [k, created.data[k]]));
+      const changed = new Set(Object.keys(given).filter((k) => {
+        const f = liveFields(e).find((x) => x.name === k);
+        return !(f.default && "value" in f.default && JSON.stringify(jsonbForm(writeValue(f, f.default.value))) === JSON.stringify(jsonbForm(given[k])));
+      }));
       const data = fillGenerated(created.data, created.generated);
       // Decision 4: an owner-scoped end user's create is owned by it, whatever the client sent.
-      const sub = ownerScope(e, s);
+      const sub = ownerScope(e, s, s.node);
       if (sub !== null) data[e.owner] = sub;
+      checkWrite(boundPolicyAt(e, s.node, s), changed, policyCtx(s, s.node, jsonbForm(given)), policyCtx(s, s.node, jsonbForm(data)));
+      admit(world, FLEX_METERS.recordCreate, 1, "flex");
       checkRelationTargets(e, data, s);
       tx++;
       const r = { id: world.newId(), entityId: e.id, data: jsonbForm(data), orgPath: s.node, key: null };
       records.set(r.id, r);
-      return JSON.stringify(serializeRecord(e, r));
+      return JSON.stringify(serializeRecord(e, seen(e, r, s)));
     },
     updateRecord(entityName, id, patchJson) {
       const body = parseBody(patchJson);
@@ -438,35 +593,40 @@ export function createFlexState(world) {
       const s = session();
       const e = resolveEntity(entityName, s);
       const plan = validatePatch(liveFields(e), recordData(body));
-      requireWriteRole(e, "update", s);
+      requireWriteReachable(e, "update", s);
       const r = records.get(rid);
       if (!r || r.entityId !== e.id || !writable(r, s)) throw notFound("record not found");
+      requireWriteAt(e, "update", s, r.orgPath);
       // Decision 4: an owner-scoped end user cannot hand its record to another (or to none); restating
       // its own sub is not a change.
-      const sub = ownerScope(e, s);
+      const sub = ownerScope(e, s, r.orgPath);
       if (sub !== null && (plan.clear.includes(e.owner) || (e.owner in plan.set && plan.set[e.owner] !== sub))) {
         throw forbidden(`the owner field '${e.owner}' cannot be changed by an owner-scoped end user`);
       }
       const merged = { ...r.data, ...plan.set };
       for (const k of plan.clear) delete merged[k];
       const stored = jsonbForm(merged);
+      // ADR-294 decision 5: a CHANGE of a non-writable field is refused, judged over the stored row; a
+      // resubmitted unchanged value is not a change; `required` over the row the write produces.
+      checkWrite(boundPolicyAt(e, r.orgPath, s), changedFields(r.data, plan.set, plan.clear), policyCtx(s, r.orgPath, r.data), policyCtx(s, r.orgPath, stored));
       // A PATCH that changes nothing is decided BEFORE the wallet (exec.rs patch_record_tx, #645).
-      if (JSON.stringify(stored) === JSON.stringify(r.data)) return JSON.stringify(serializeRecord(e, r));
+      if (JSON.stringify(stored) === JSON.stringify(r.data)) return JSON.stringify(serializeRecord(e, seen(e, r, s)));
       checkRelationTargets(e, plan.set, s);
       admit(world, FLEX_METERS.recordUpdate, 1, "flex");
       tx++;
       r.data = stored;
-      return JSON.stringify(serializeRecord(e, r));
+      return JSON.stringify(serializeRecord(e, seen(e, r, s)));
     },
     deleteRecord(entityName, id) {
       const rid = parseUuid(id);
       if (rid === null) throw notFound("record not found");
       const s = session();
       const e = resolveEntity(entityName, s);
-      requireWriteRole(e, "delete", s);
+      requireWriteReachable(e, "delete", s);
       admit(world, FLEX_METERS.recordDelete, 1, "flex");
       const r = records.get(rid);
       if (!r || r.entityId !== e.id || !writable(r, s)) throw notFound("record not found");
+      requireWriteAt(e, "delete", s, r.orgPath);
       tx++;
       records.delete(rid);
       return "{}";
@@ -489,7 +649,7 @@ export function createFlexState(world) {
       tx++;
       // An entity created through the API is a layer at the session's node: the base layer at `/`, an
       // org overlay below it. Owner and shared are base-layer declarations only (declare).
-      const e = { id: world.newId(), name, displayName, fields: [], orgPath: s.node, owner: null, ownerBypassRoles: [], shared: false };
+      const e = { id: world.newId(), name, displayName, fields: [], orgPath: s.node, owner: null, ownerBypassRoles: [], shared: false, policy: [] };
       e.fields = insertFields(e, specs);
       entities.set(name, e);
       // The create response lists fields in REQUEST order (exec.rs create_entity); a later
@@ -506,6 +666,38 @@ export function createFlexState(world) {
     },
     getEntity(name) {
       return JSON.stringify(entityDoc(resolveEntity(name)));
+    },
+    /**
+     * entities.policy (#384 D102/D112; requests.json `policy_answer`): the rules governing a row of
+     * `name` at `at` (the acting node when absent) — the same compiled chain the field-policy evaluation
+     * reads (`policyAt`), base first — each with its id, field, effect, authoring node, the namespaces it
+     * reads and whether it is non-evaluable; none evaluated, no `when` value disclosed. The caller's own
+     * acting node is its own to read; any other node needs POLICY_BOUND_SCOPE with `at` at or below the
+     * acting node (flex.forbidden); `at` off the org_path grammar is flex.validation; an entity not visible
+     * from `at` is flex.not_found.
+     */
+    policy(name, at) {
+      const s = session();
+      const node = at ?? s.node;
+      if (!validOrgPath(node)) throw validation(`'${String(node)}' is not an org path`, "at");
+      if (node !== s.node) {
+        if (!s.authority.scopes.includes(POLICY_BOUND_SCOPE)) throw forbidden(`explain requires ${POLICY_BOUND_SCOPE}`);
+        if (!atOrBelow(node, s.node)) throw forbidden(`${node} is not at or below the caller's node ${s.node}`);
+      }
+      const e = resolveEntity(name, { ...s, node });
+      return {
+        schema_version: POLICY_ARTIFACT_SCHEMA_VERSION,
+        entity: e.name,
+        node,
+        rules: policyAt(e, node).map((r) => ({
+          id: r.id,
+          field: r.field,
+          effect: r.effect,
+          node: r.node,
+          reads: ruleReads(r, world.contract.fieldPolicy.policyReads),
+          non_evaluable: r.cond === null,
+        })),
+      };
     },
     deleteEntity(name) {
       const e = resolveEntity(name);
@@ -600,10 +792,46 @@ export function createFlexState(world) {
 
     // ── the test-author API (never reachable from a guest) ──────────────────────────────
     /**
-     * The bearer the function's Flex calls carry: the runtime's service account at `/`. A test may set
-     * another ({plane, sub, roles, org_path}) — an `end_user` bearer, or a service account of an org node.
+     * The bearer the function's Flex calls carry: the runtime's service account. A test may set another
+     * ({plane, sub}; `org_path` on the internal plane only; `membership`, an end_user bearer's
+     * X-Air-Membership) — identity only: its node and authority are its world.projection key's.
      */
     bearer: RUNTIME_BEARER,
+    /**
+     * The surface the invocation's entry serves (ADR-294 decision 1, #384 D82): `api` unless the test
+     * serves another entry. The host signs it into its assertion, and Flex reads it from there only — a
+     * call the host signs nothing for (no session, no declared entry) is `api` whatever this says.
+     */
+    surface: "api",
+    /**
+     * Publish a field-policy overlay — a single-change changeset at `at`, strictly below `/` (ADR-294
+     * decision 3): its rules join the chain of every row at or below `at`, after the base and every
+     * ancestor's, and can only take away. A rule outside the grammar or naming a field the entity lacks is
+     * flex.validation.
+     */
+    publishOverlay({ at, entity, policy }) {
+      if (!validOrgPath(at) || at === "/") throw validation(`an overlay sits at a node strictly below '/', not '${String(at)}'`);
+      const e = entities.get(entity);
+      if (!e || (e.orgPath !== "/" && !atOrBelow(at, e.orgPath))) throw notFound(`entity '${entity}' not found`);
+      if (!Array.isArray(policy)) throw validation("an overlay's 'policy' must be an array of rules");
+      const rules = policy.map((r) => ({ ...parseRule(world.contract.fieldPolicy, liveFields(e), r, at, validOrgPath), id: world.newId() }));
+      e.policy = [...e.policy, ...rules];
+    },
+    /**
+     * Run `fn` with every Flex call it makes signed as ONE declared elevated aggregate call (an
+     * `elevation` assertion over the invocation's own acting fields, carrying `declaration` — {function,
+     * entity, ops, filter, group_by, fields, scope}). What the host does for `flex-query.aggregate-elevated`;
+     * a test exercising Flex's own check uses it directly.
+     */
+    underElevation(declaration, fn) {
+      const saved = elevating;
+      elevating = declaration;
+      try {
+        return fn();
+      } finally {
+        elevating = saved;
+      }
+    },
     /**
      * Converge the base layer as the release's PUT /v1/schema does (ADR-217 D4): `declaration` is
      * {entities: {<name>: {display_name, owner, owner_bypass_roles, shared, write_roles, fields: {<field>: {type,
@@ -701,6 +929,14 @@ export function createFlexState(world) {
           }
         }
         for (const u of applied) u.apply();
+        // ADR-294 decision 1: the declared `policy` is the base layer at `/`, replaced whole by each
+        // convergence; the overlays published below `/` stay.
+        const base = declared.map(([name, d]) => {
+          const e = entities.get(name);
+          if (d.policy !== undefined && d.policy !== null && !Array.isArray(d.policy)) throw validation(`entity '${name}': 'policy' must be an array of rules`);
+          return [e, (d.policy ?? []).map((r) => ({ ...parseRule(world.contract.fieldPolicy, liveFields(e), r, "/", validOrgPath), id: world.newId() }))];
+        });
+        for (const [e, rules] of base) e.policy = [...rules, ...(e.policy ?? []).filter((r) => r.node !== "/")];
         zone = { name: declaration.time_zone, rules };
         return { applied: applied.map(({ op, entity, field }) => ({ op, entity, field })) };
       } finally {

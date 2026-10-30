@@ -18,13 +18,26 @@ beforeEach(() => {
 });
 
 it("creates a pet", async () => {
-  const res = await invoke("app/functions/pets/index.js",
+  // through the [[route]] config/routes.toml declares at /api/pets
+  const res = await invoke({ route: "/api/pets" },
     new Request("https://x/api/pets", { method: "POST", body: JSON.stringify({ name: "rex" }) }));
   assert.equal(res.status, 201);
   assert.equal(world.flex.records("pet").length, 1);
 });
 ```
 
+- **Through a declared entry.** `invoke(entry, request)` runs the function behind an entry the release
+  declares — `{ route: "/api/pets" }`, `{ function: "notify", event: "pet.adopted" }`,
+  `{ function: "notify", cron: "0 3 * * *" }`, or a direct invoke `{ function: "notify", orgPath }` — and
+  acts at the node the platform resolves for it: the route's or trigger's `org_path`, an authenticated
+  route's session home, the Builder's node for a direct invoke. An entry the release does not declare, or
+  one without `org_path`, answers the platform's `409 functions.org_path_undeclared` and the function
+  never runs. The entries are the release's, compiled by `aircloud test prepare` (npm test's pretest).
+- **Sessions only where the platform carries one.** A public route serves no end user, whoever the test
+  signed in with `world.principal.signIn`: the function sees no principal and acts at the route's
+  `org_path`. An authenticated route needs a session (`401 session_required` without one) and, when it
+  is narrowed to `roles`, a session holding one of them — at its membership's home, or at the route's
+  `at` node or below — or it answers `403 session_role_required`, as the platform does.
 - **Generated, never hand-kept.** The capability surface (interfaces, functions, types, error codes,
   gated meters, capture arms) is generated from the `aircloud:capability` WIT and the capability,
   errors and metering contracts; a capability added to the WIT cannot be missing here.
@@ -40,6 +53,15 @@ it("creates a pet", async () => {
   refusal's `e.payload.correlationId`.
 - **Egress** never leaves the process: register answers with `world.credential.respond(...)`; an
   unanswered egress fails the test rather than inventing a reply.
+
+## Migrating from 1.x
+
+2.0.4 changes `invoke`'s signature: `invoke(entry, request)` names the declared entry the function runs
+through, where 1.x took the function's module (`invoke("app/functions/pets/index.js", request)`, or
+its `URL`). Replace the module with the entry — `{ route: "/api/pets" }` for the route
+`config/routes.toml` declares — and run `aircloud test prepare` (npm test's pretest) so the release's
+entries are compiled where `invoke` reads them. A test that signed an end user in to call a public route
+now calls it without one; an owned or shared entity's route belongs inside `[authenticate]`.
 
 ## System tests
 

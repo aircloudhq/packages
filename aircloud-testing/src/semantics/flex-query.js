@@ -46,7 +46,7 @@ const MIN_MAX_TYPES = ["text", "string", "integer", "decimal", "datetime", "date
 const AGG_FNS = ["count", "sum", "avg", "min", "max"];
 const GROUP_BY_TYPES = ["text", "string", "integer", "boolean", "date", "relation", "enum"];
 
-export const QUERY_TABLES = { OP_MATRIX, SORTABLE, MIN_MAX_TYPES, GROUP_BY_TYPES };
+export const QUERY_TABLES = { OP_MATRIX, SORTABLE, MIN_MAX_TYPES, GROUP_BY_TYPES, MAX_IN_VALUES };
 
 /** Scope a refusal to the field it judged (details.fields.<field>), as ast.rs `scoped` does. */
 function scoped(f, fn) {
@@ -266,11 +266,11 @@ function decodeCursor(token, sort) {
 const present = (v) => v !== undefined && v !== null;
 
 /** SQL 3VL: returns true | false | null (UNKNOWN). */
-function evalFilter(node, data) {
+function evalFilter(node, data, hidden) {
   if (node.and) {
     let unknown = false;
     for (const c of node.and) {
-      const r = evalFilter(c, data);
+      const r = evalFilter(c, data, hidden);
       if (r === false) return false;
       if (r === null) unknown = true;
     }
@@ -279,17 +279,19 @@ function evalFilter(node, data) {
   if (node.or) {
     let unknown = false;
     for (const c of node.or) {
-      const r = evalFilter(c, data);
+      const r = evalFilter(c, data, hidden);
       if (r === true) return true;
       if (r === null) unknown = true;
     }
     return unknown ? null : false;
   }
   if (node.not) {
-    const r = evalFilter(node.not, data);
+    const r = evalFilter(node.not, data, hidden);
     return r === null ? null : !r;
   }
   const { field, op, value } = node.leaf;
+  // ADR-294 decision 5: a term on a field hidden at this row is UNKNOWN, whatever its operator.
+  if (hidden?.has(field.name)) return null;
   const v = data[field.name];
   if (op === "is_null") return value ? !present(v) : present(v);
   if (!present(v)) return null;
@@ -388,18 +390,26 @@ function cosineDistance(a, b) {
   return 1 - dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-/** Run a parsed query over the entity's live records → the I5 response body object. */
+/**
+ * Run a parsed query over the entity's live records → the I5 response body object. Each record is
+ * `{id, data, hidden?}`: `data` is what the caller may see of the row (a field hidden from it at the row's
+ * node is absent, so it orders, aggregates and full-text-matches nothing — ADR-294 decision 5) and
+ * `hidden` names those fields, so a filter term on one is UNKNOWN and a vector search never admits the row
+ * by one.
+ */
 export function runQuery(q, records) {
   let rows = records.filter((r) => {
     if (q.search && q.search.fts !== null && !ftsMatch(q.search.fts, r.data)) return false;
-    return q.filter ? evalFilter(q.filter, r.data) === true : true;
+    return q.filter ? evalFilter(q.filter, r.data, r.hidden) === true : true;
   });
 
   if (q.aggregate) return runAggregate(q.aggregate, rows);
 
   if (q.search && q.search.vector) {
     const { field, query, k } = q.search.vector;
-    const scored = rows.map((r) => ({ r, d: present(r.data[field]) ? cosineDistance(r.data[field], query) : null }));
+    // A row whose vector is hidden from the caller is never a candidate by it (ADR-294 decision 5).
+    const scored = rows.filter((r) => !r.hidden?.has(field))
+      .map((r) => ({ r, d: present(r.data[field]) ? cosineDistance(r.data[field], query) : null }));
     // pgvector ORDER BY ASC: numbers, then NaN, then NULL (NULLS LAST); ties by id.
     const rank = (x) => (x.d === null ? 2 : Number.isNaN(x.d) ? 1 : 0);
     scored.sort((a, b) => rank(a) - rank(b) || (rank(a) === 0 ? a.d - b.d : 0) || (a.r.id < b.r.id ? -1 : 1));
