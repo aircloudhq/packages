@@ -17,7 +17,8 @@
     "contracts/flex/v1/types.json",
     "contracts/flex/v1/field-policy-vectors.json",
     "contracts/auth/v1/account-lifecycle.json",
-    "contracts/deploy/v1/skeleton-v1.json"
+    "contracts/deploy/v1/skeleton-v1.json",
+    "contracts/bus/nats-permissions-v1.json"
   ],
   "interfaces": {
     "flex-query": [

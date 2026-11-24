@@ -1,7 +1,8 @@
 // @aircloudhq/testing — the invocation an `invoke()` runs as: what the functions-host resolved for it before
 // the guest ran (functions/src/acting_node.rs `ActingNode`, one per invocation).
 //
-// A frame is {entry, acting, session, elevate}: the ENTRY node (the bound of every narrowing), the node the next
+// A frame is {function, entry, acting, session, elevate}: the function the invocation runs (the name its acting
+// assertion signs, so an event it publishes is `fn:<function>`'s), the ENTRY node (the bound of every narrowing), the node the next
 // call acts at, whether the invocation serves the signed-in end user (a route) or none (an event, a cron, a
 // direct invoke), and the invoked function's `[[elevate]]` declarations (release_model.rs). It is tracked with AsyncLocalStorage, as the correlation id is, so a narrowing ends with its
 // invocation and two invocations in flight keep their own nodes — the host instantiates every invocation

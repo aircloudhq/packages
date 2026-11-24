@@ -74,6 +74,27 @@ export function projectionResource(projection, name) {
  * @param {object} resource  a projection resource
  * @param {{api?: Function, surface?: string}} [options]
  */
+/** The header a mutation names its effect in (ADR-302 decision 8); a generated product's API requires it. */
+export const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
+
+/**
+ * The key of one submission: the same key while the submission is retried unchanged (a lost answer replays the
+ * first write), a new one once its payload changes or it succeeded (a new submission is a new write).
+ */
+export function submissionKeys() {
+  let last = null;
+  return {
+    keyFor(payload) {
+      const text = JSON.stringify(payload ?? null);
+      if (last === null || last.text !== text) last = { text, key: crypto.randomUUID() };
+      return last.key;
+    },
+    succeeded() {
+      last = null;
+    },
+  };
+}
+
 export function createResource(resource, options = {}) {
   const api = options.api ?? defaultApi;
   const prefix = resource.route_prefix;
@@ -84,6 +105,12 @@ export function createResource(resource, options = {}) {
   }
   const declared = surface === undefined ? undefined : { headers: { [SURFACE_HEADER]: surface } };
   const call = (method, path, body) => (declared ? api(method, path, body, declared) : api(method, path, body));
+  // A mutation names its effect with an Idempotency-Key (ADR-302 decision 8): the caller's own (a form reuses one
+  // across the retries of one submission, so a lost answer is retried without writing twice), else a fresh one.
+  const mutate = (method, path, body, idempotencyKey) => {
+    const headers = { ...(declared?.headers ?? {}), [IDEMPOTENCY_KEY_HEADER]: idempotencyKey ?? crypto.randomUUID() };
+    return api(method, path, body, { headers });
+  };
   const item = (id) => `${prefix}/${encodeURIComponent(id)}`;
   return {
     resource,
@@ -107,9 +134,10 @@ export function createResource(resource, options = {}) {
       } while (cursor);
     },
     get: (id) => call('GET', item(id)),
-    create: (data) => call('POST', prefix, data),
-    update: (id, data) => call('PATCH', item(id), data),
-    destroy: (id) => call('DELETE', item(id)),
+    /** create(data, {idempotencyKey}) — the key names this create; a retry of it passes the same key. */
+    create: (data, { idempotencyKey } = {}) => mutate('POST', prefix, data, idempotencyKey),
+    update: (id, data, { idempotencyKey } = {}) => mutate('PATCH', item(id), data, idempotencyKey),
+    destroy: (id, { idempotencyKey } = {}) => mutate('DELETE', item(id), undefined, idempotencyKey),
   };
 }
 

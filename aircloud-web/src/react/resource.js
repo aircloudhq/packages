@@ -23,7 +23,7 @@
 // only: Flex keeps enforcing every read and write.
 import { createElement as h, useMemo, useState } from 'react';
 import { Route, Routes, useNavigate, useParams } from 'react-router';
-import { createResource, recordLabel, SURFACES } from '../resource.js';
+import { createResource, recordLabel, submissionKeys, SURFACES } from '../resource.js';
 import { humanAttributeName, modelName } from '../model.js';
 import { useI18n } from './i18n.js';
 import { useSite } from './router.js';
@@ -248,6 +248,8 @@ export function ResourceForm({ resource, fields, id, base = '..' }) {
   const i18n = useI18n();
   const navigate = useNavigate();
   const client = useMemo(() => createResource(resource, { surface: SURFACES.form }), [resource]);
+  // One Idempotency-Key per submission, reused across its retries (ADR-302 decision 8).
+  const keys = useMemo(() => submissionKeys(), [resource, id]);
   const { record, error } = useRecord(resource, id, { surface: SURFACES.form });
   const { resource: visible, ready } = useFieldSchema(resource, SURFACES.form);
   const model = modelName(resource, { i18n });
@@ -262,11 +264,14 @@ export function ResourceForm({ resource, fields, id, base = '..' }) {
       resource: visible,
       record: record ?? undefined,
       fields,
-      onSubmit: (payload) =>
-        (id === undefined ? client.create(payload) : client.update(id, payload)).then((r) => {
+      onSubmit: (payload) => {
+        const idempotencyKey = keys.keyFor(payload);
+        return (id === undefined ? client.create(payload, { idempotencyKey }) : client.update(id, payload, { idempotencyKey })).then((r) => {
+          keys.succeeded();
           navigate(`${base}/${encodeURIComponent(r.id)}`);
           return r;
-        }),
+        });
+      },
     }),
     h('p', null, h(LinkTo, { to: id === undefined ? base : `${base}/${encodeURIComponent(id)}` }, i18n.t('helpers.resource.cancel'))),
   );

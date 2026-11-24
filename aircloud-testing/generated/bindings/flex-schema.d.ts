@@ -8,7 +8,7 @@ import type * as T from "../types.js";
  *
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
-export function createEntity(entityJson: string): string;
+export function createEntity(entityJson: string, idempotencyKey: string): string;
 
 /**
  * flex-schema.list-entities
@@ -29,35 +29,35 @@ export function getEntity(name: string): string;
  *
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
-export function deleteEntity(name: string): string;
+export function deleteEntity(name: string, idempotencyKey: string): string;
 
 /**
  * flex-schema.add-field
  *
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
-export function addField(entity: string, fieldJson: string): string;
+export function addField(entity: string, fieldJson: string, idempotencyKey: string): string;
 
 /**
  * flex-schema.update-field
  *
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
-export function updateField(entity: string, field: string, patchJson: string): string;
+export function updateField(entity: string, field: string, patchJson: string, idempotencyKey: string): string;
 
 /**
  * flex-schema.remove-field
  *
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
-export function removeField(entity: string, field: string): string;
+export function removeField(entity: string, field: string, idempotencyKey: string): string;
 
 /**
  * flex-schema.update-entity
  *
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
-export function updateEntity(name: string, patchJson: string): string;
+export function updateEntity(name: string, patchJson: string, idempotencyKey: string): string;
 
 /**
  * flex-schema.put-policy

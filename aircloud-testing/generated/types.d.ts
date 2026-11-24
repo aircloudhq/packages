@@ -73,6 +73,7 @@ export namespace Bus {
   export interface PublishRequest {
     topic: string;
     payload: string;
+    idempotencyKey: string;
   }
   export interface PublishResponse {
     eventId: string;
@@ -90,6 +91,7 @@ export namespace CommsMail {
     html?: string;
     text?: string;
     headers: Array<[string, string]>;
+    idempotencyKey: string;
   }
   export interface SendResponse {
     messageId: string;
@@ -102,6 +104,7 @@ export namespace CommsWhatsapp {
     to: string;
     text: string;
     latencyTier: CommsWhatsapp.LatencyTier;
+    idempotencyKey: string;
   }
   export interface SendResponse {
     messageId: string;

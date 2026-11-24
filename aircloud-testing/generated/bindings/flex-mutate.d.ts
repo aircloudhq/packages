@@ -8,18 +8,18 @@ import type * as T from "../types.js";
  *
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
-export function createRecord(entity: string, recordJson: string): string;
+export function createRecord(entity: string, recordJson: string, idempotencyKey: string): string;
 
 /**
  * flex-mutate.update-record
  *
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
-export function updateRecord(entity: string, id: string, patchJson: string): string;
+export function updateRecord(entity: string, id: string, patchJson: string, idempotencyKey: string): string;
 
 /**
  * flex-mutate.delete-record
  *
  * @throws {ComponentError} whose `payload` is the error-envelope
  */
-export function deleteRecord(entity: string, id: string): string;
+export function deleteRecord(entity: string, id: string, idempotencyKey: string): string;

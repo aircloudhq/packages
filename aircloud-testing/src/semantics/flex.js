@@ -47,6 +47,7 @@ import {
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PRODUCT_SCHEMA_WRITER, productRoot, productSchemaFile } from "./i18n.js";
+import { canonicalDocument, checkKey, createFlexKeyMemory, flexRouteDigest } from "./keys.js";
 
 const MAX_BODY = 256 * 1024;
 const RESERVED_ENTITY_PREFIX = "sys_";
@@ -177,6 +178,62 @@ function scopedTo(field, fn) {
   }
 }
 
+// ── The validated definitions a keyed schema mutation digests (ADR-302 decision 8; design § 5.6) ──────────────
+//
+// flex-jit's own documents (flex/src/exec.rs entity_definition, field_definition, entity_patch_document,
+// field_patch_document): the digest is over what the request DEFINES once validated, never its raw body, so two
+// spellings the executor reads alike are one request — held byte for byte to contracts/durability/v1/
+// request-digest-vectors.json `flex_requests` (test/keys.test.mjs). A refusal here is the request's validation refusal,
+// thrown before the key memory: it binds nothing.
+
+/** A validated field spec's definition: name, display name, type, config, required, and its judged default. */
+export function fieldDefinition(spec) {
+  const d = { name: spec.name, display_name: spec.displayName, type: spec.type, config: spec.config, required: spec.required };
+  if (spec.default) d.default = spec.default;
+  return d;
+}
+
+/** An entity create body's validated definition: its name, its display name (the name when none), each field's. */
+export function entityDefinition(body) {
+  if (!isObj(body)) throw validation("entity body must be an object");
+  if (typeof body.name !== "string") throw validation("entity 'name' is required");
+  if (!Array.isArray(body.fields)) throw validation("entity 'fields' array is required");
+  return {
+    name: body.name,
+    display_name: typeof body.display_name === "string" ? body.display_name : body.name,
+    fields: body.fields.map((f) => fieldDefinition(parseNewField(f))),
+  };
+}
+
+/** An entity patch body's validated patch plan: {set: {display_name?}, clear: []}. */
+export function entityPatchDocument(body) {
+  if (!isObj(body)) throw validation("entity patch body must be an object");
+  const set = {};
+  if (typeof body.display_name === "string") set.display_name = body.display_name;
+  return { set, clear: [] };
+}
+
+/**
+ * A field patch body's validated patch plan: {set: {display_name?, required?, default?}, clear: ["default"]?}, the
+ * default as the field accepts it — judged against `field` ({type, parsed}), whose type and config are immutable; a
+ * field the entity does not carry (null) is digested as sent and its write answers not_found.
+ */
+export function fieldPatchDocument(field, body) {
+  if (!isObj(body)) throw validation("field patch body must be an object");
+  const set = {};
+  const clear = [];
+  if (typeof body.display_name === "string") set.display_name = body.display_name;
+  if (typeof body.required === "boolean") set.required = body.required;
+  if ("default" in body) {
+    if (body.default === null) clear.push("default");
+    else {
+      const d = scopedTo("default", () => parseDefault(body.default));
+      set.default = field === null ? d : scopedTo("default", () => validateDefault(field, d));
+    }
+  }
+  return { set, clear };
+}
+
 /** The I5 field doc; `default` only when the field has one (ADR-259 decision 3). */
 function fieldDoc(f) {
   const doc = { id: f.id, name: f.name, display_name: f.displayName, type: f.type, config: f.config, required: f.required };
@@ -189,6 +246,31 @@ export function createFlexState(world) {
   let zone = null; // the declared product time zone {name, rules} (ADR-259), set by declare()
   const entities = new Map(); // live entities by name
   const records = new Map(); // tenant-wide live records by id: { id, entityId, data, orgPath, key }
+  // ADR-302 decision 8: the gated mutations' key memory (flex.mutation_keys' applied rows).
+  const keys = createFlexKeyMemory(world);
+  // The test-author API's own writes (a seed upsert, an insert, a declared schema) are the platform's, never a
+  // guest's: each takes a key of its own, so it binds no guest key.
+  let internalSeq = 0;
+  const internalKey = (kind) => `double:${kind}:${++internalSeq}`;
+  /**
+   * Run a gated mutation under its idempotency key (flex-jit's order): the key's grammar and the document's I-JSON
+   * first, then the schema validation that yields the digested request, then the key memory (a replay answers the
+   * stored answer, governing nothing), and only then the governance and the write — a refusal binds nothing.
+   */
+  function keyed(key, doc, operation, entity, routeName, prepare) {
+    checkKey("flex.validation", key);
+    // An empty body is {} (flex-jit parse_json), and {} is I-JSON.
+    const canonical = doc !== undefined && doc !== "" ? canonicalDocument("flex.validation", doc, "body") : "";
+    const s = session();
+    const scope = { orgPath: s.node, principal: s.principal };
+    // flex-jit's route answers from the key before it resolves the entity or reads the schema (lane C's review round
+    // I2): the request as the route carried it, the entity the path names ("" for an entity create).
+    const route = flexRouteDigest(operation, operation === "entity.create" ? "" : entity, routeName, canonical);
+    const replayed = keys.replay(key, scope, route);
+    if (replayed !== undefined) return replayed;
+    const { name, validated, write } = prepare(s);
+    return keys.run(key, scope, { operation, entity, name, validated, route }, write);
+  }
 
   /** The elevation declaration the current Flex calls are signed under (one elevated call), or null. */
   let elevating = null;
@@ -213,6 +295,13 @@ export function createFlexState(world) {
       sub: acting.sub,
       authority: acting.authority,
       elevation: acting.elevation ?? null,
+      // ADR-302 decision 8: the acting principal a key is scoped on — the bearer, and the end user a host
+      // assertion asserts (empty when none).
+      principal: {
+        plane: state.bearer.plane,
+        sub: state.bearer.sub,
+        act: acting.acting === "end_user" && acting.source === "assertion" ? acting.sub : "",
+      },
     };
   }
   /** The roles an acting END USER holds at `node` (a record's node, #384 AC7); none for the tenant. */
@@ -560,78 +649,108 @@ export function createFlexState(world) {
       if (!r || r.entityId !== e.id || !readable(r, s)) throw notFound("record not found");
       return JSON.stringify(serializeRecord(e, seen(e, r, s)));
     },
-    createRecord(entityName, recordJson) {
-      const body = parseBody(recordJson);
-      const s = session();
-      const e = resolveEntity(entityName, s);
-      const submitted = recordData(body);
-      const created = validateCreate(liveFields(e), submitted);
-      requireWriteAt(e, "create", s, s.node);
-      // ADR-294 decision 5: on create, any value other than absent or the field's declared default is a
-      // change, judged over the submitted row; `required` over the row the write produces.
-      const given = Object.fromEntries(Object.keys(submitted).filter((k) => submitted[k] !== null).map((k) => [k, created.data[k]]));
-      const changed = new Set(Object.keys(given).filter((k) => {
-        const f = liveFields(e).find((x) => x.name === k);
-        return !(f.default && "value" in f.default && JSON.stringify(jsonbForm(writeValue(f, f.default.value))) === JSON.stringify(jsonbForm(given[k])));
+    createRecord(entityName, recordJson, idempotencyKey) {
+      return keyed(idempotencyKey, recordJson, "record.create", entityName, "", (s) => {
+        const body = parseBody(recordJson);
+        const e = resolveEntity(entityName, s);
+        const submitted = recordData(body);
+        const created = validateCreate(liveFields(e), submitted);
+        return {
+          name: "",
+          validated: jsonbForm(created.data),
+          write: () => {
+            requireWriteAt(e, "create", s, s.node);
+            // ADR-294 decision 5: on create, any value other than absent or the field's declared default is a
+            // change, judged over the submitted row; `required` over the row the write produces.
+            const given = Object.fromEntries(Object.keys(submitted).filter((k) => submitted[k] !== null).map((k) => [k, created.data[k]]));
+            const changed = new Set(Object.keys(given).filter((k) => {
+              const f = liveFields(e).find((x) => x.name === k);
+              return !(f.default && "value" in f.default && JSON.stringify(jsonbForm(writeValue(f, f.default.value))) === JSON.stringify(jsonbForm(given[k])));
+            }));
+            const data = fillGenerated(created.data, created.generated);
+            // Decision 4: an owner-scoped end user's create is owned by it, whatever the client sent.
+            const sub = ownerScope(e, s, s.node);
+            if (sub !== null) data[e.owner] = sub;
+            checkWrite(boundPolicyAt(e, s.node, s), changed, policyCtx(s, s.node, jsonbForm(given)), policyCtx(s, s.node, jsonbForm(data)));
+            admit(world, FLEX_METERS.recordCreate, 1, "flex");
+            checkRelationTargets(e, data, s);
+            tx++;
+            const r = { id: world.newId(), entityId: e.id, data: jsonbForm(data), orgPath: s.node, key: null };
+            records.set(r.id, r);
+            return { answer: JSON.stringify(serializeRecord(e, seen(e, r, s))), recordId: r.id };
+          },
+        };
+      });
+    },
+    updateRecord(entityName, id, patchJson, idempotencyKey) {
+      return keyed(idempotencyKey, patchJson, "record.update", entityName, parseUuid(id) ?? String(id), (s) => {
+        const body = parseBody(patchJson);
+        const rid = parseUuid(id);
+        if (rid === null) throw notFound("record not found");
+        const e = resolveEntity(entityName, s);
+        const plan = validatePatch(liveFields(e), recordData(body));
+        return {
+          name: rid,
+          validated: { set: jsonbForm(plan.set), clear: plan.clear },
+          write: () => {
+            requireWriteReachable(e, "update", s);
+            const r = records.get(rid);
+            if (!r || r.entityId !== e.id || !writable(r, s)) throw notFound("record not found");
+            requireWriteAt(e, "update", s, r.orgPath);
+            // Decision 4: an owner-scoped end user cannot hand its record to another (or to none); restating
+            // its own sub is not a change.
+            const sub = ownerScope(e, s, r.orgPath);
+            if (sub !== null && (plan.clear.includes(e.owner) || (e.owner in plan.set && plan.set[e.owner] !== sub))) {
+              throw forbidden(`the owner field '${e.owner}' cannot be changed by an owner-scoped end user`);
+            }
+            const merged = { ...r.data, ...plan.set };
+            for (const k of plan.clear) delete merged[k];
+            const stored = jsonbForm(merged);
+            // ADR-294 decision 5: a CHANGE of a non-writable field is refused, judged over the stored row; a
+            // resubmitted unchanged value is not a change; `required` over the row the write produces.
+            checkWrite(boundPolicyAt(e, r.orgPath, s), changedFields(r.data, plan.set, plan.clear), policyCtx(s, r.orgPath, r.data), policyCtx(s, r.orgPath, stored));
+            // A PATCH that changes nothing is decided BEFORE the wallet (exec.rs patch_record_tx, #645).
+            if (JSON.stringify(stored) !== JSON.stringify(r.data)) {
+              checkRelationTargets(e, plan.set, s);
+              admit(world, FLEX_METERS.recordUpdate, 1, "flex");
+              tx++;
+              r.data = stored;
+            }
+            return { answer: JSON.stringify(serializeRecord(e, seen(e, r, s))), recordId: r.id };
+          },
+        };
+      });
+    },
+    deleteRecord(entityName, id, idempotencyKey) {
+      return keyed(idempotencyKey, undefined, "record.delete", entityName, parseUuid(id) ?? String(id), (s) => {
+        const rid = parseUuid(id);
+        if (rid === null) throw notFound("record not found");
+        const e = resolveEntity(entityName, s);
+        return {
+          name: rid,
+          validated: undefined,
+          write: () => {
+            requireWriteReachable(e, "delete", s);
+            admit(world, FLEX_METERS.recordDelete, 1, "flex");
+            const r = records.get(rid);
+            if (!r || r.entityId !== e.id || !writable(r, s)) throw notFound("record not found");
+            requireWriteAt(e, "delete", s, r.orgPath);
+            tx++;
+            records.delete(rid);
+            return { answer: "{}", recordId: rid };
+          },
+        };
+      });
+    },
+    /** The guest's gated schema write (ADR-302 decision 8): {@link keyed} around {@link createEntityApply}. */
+    createEntity(entityJson, idempotencyKey) {
+      return keyed(idempotencyKey, entityJson, "entity.create", (() => { const b = parseBody(entityJson); return isObj(b) && typeof b.name === "string" ? b.name : ""; })(), "", () => ({
+        name: "",
+        validated: entityDefinition(parseBody(entityJson)),
+        write: () => ({ answer: state.createEntityApply(entityJson) }),
       }));
-      const data = fillGenerated(created.data, created.generated);
-      // Decision 4: an owner-scoped end user's create is owned by it, whatever the client sent.
-      const sub = ownerScope(e, s, s.node);
-      if (sub !== null) data[e.owner] = sub;
-      checkWrite(boundPolicyAt(e, s.node, s), changed, policyCtx(s, s.node, jsonbForm(given)), policyCtx(s, s.node, jsonbForm(data)));
-      admit(world, FLEX_METERS.recordCreate, 1, "flex");
-      checkRelationTargets(e, data, s);
-      tx++;
-      const r = { id: world.newId(), entityId: e.id, data: jsonbForm(data), orgPath: s.node, key: null };
-      records.set(r.id, r);
-      return JSON.stringify(serializeRecord(e, seen(e, r, s)));
     },
-    updateRecord(entityName, id, patchJson) {
-      const body = parseBody(patchJson);
-      const rid = parseUuid(id);
-      if (rid === null) throw notFound("record not found");
-      const s = session();
-      const e = resolveEntity(entityName, s);
-      const plan = validatePatch(liveFields(e), recordData(body));
-      requireWriteReachable(e, "update", s);
-      const r = records.get(rid);
-      if (!r || r.entityId !== e.id || !writable(r, s)) throw notFound("record not found");
-      requireWriteAt(e, "update", s, r.orgPath);
-      // Decision 4: an owner-scoped end user cannot hand its record to another (or to none); restating
-      // its own sub is not a change.
-      const sub = ownerScope(e, s, r.orgPath);
-      if (sub !== null && (plan.clear.includes(e.owner) || (e.owner in plan.set && plan.set[e.owner] !== sub))) {
-        throw forbidden(`the owner field '${e.owner}' cannot be changed by an owner-scoped end user`);
-      }
-      const merged = { ...r.data, ...plan.set };
-      for (const k of plan.clear) delete merged[k];
-      const stored = jsonbForm(merged);
-      // ADR-294 decision 5: a CHANGE of a non-writable field is refused, judged over the stored row; a
-      // resubmitted unchanged value is not a change; `required` over the row the write produces.
-      checkWrite(boundPolicyAt(e, r.orgPath, s), changedFields(r.data, plan.set, plan.clear), policyCtx(s, r.orgPath, r.data), policyCtx(s, r.orgPath, stored));
-      // A PATCH that changes nothing is decided BEFORE the wallet (exec.rs patch_record_tx, #645).
-      if (JSON.stringify(stored) === JSON.stringify(r.data)) return JSON.stringify(serializeRecord(e, seen(e, r, s)));
-      checkRelationTargets(e, plan.set, s);
-      admit(world, FLEX_METERS.recordUpdate, 1, "flex");
-      tx++;
-      r.data = stored;
-      return JSON.stringify(serializeRecord(e, seen(e, r, s)));
-    },
-    deleteRecord(entityName, id) {
-      const rid = parseUuid(id);
-      if (rid === null) throw notFound("record not found");
-      const s = session();
-      const e = resolveEntity(entityName, s);
-      requireWriteReachable(e, "delete", s);
-      admit(world, FLEX_METERS.recordDelete, 1, "flex");
-      const r = records.get(rid);
-      if (!r || r.entityId !== e.id || !writable(r, s)) throw notFound("record not found");
-      requireWriteAt(e, "delete", s, r.orgPath);
-      tx++;
-      records.delete(rid);
-      return "{}";
-    },
-    createEntity(entityJson) {
+    createEntityApply(entityJson) {
       const body = parseBody(entityJson);
       if (!isObj(body)) throw validation("entity body must be an object");
       if (typeof body.name !== "string") throw validation("entity 'name' is required");
@@ -699,14 +818,30 @@ export function createFlexState(world) {
         })),
       };
     },
-    deleteEntity(name) {
+    /** The guest's gated schema write (ADR-302 decision 8): {@link keyed} around {@link deleteEntityApply}. */
+    deleteEntity(name, idempotencyKey) {
+      return keyed(idempotencyKey, undefined, "entity.delete", name, "", () => ({
+        name: "",
+        validated: undefined,
+        write: () => ({ answer: state.deleteEntityApply(name) }),
+      }));
+    },
+    deleteEntityApply(name) {
       const e = resolveEntity(name);
       admit(world, FLEX_METERS.entityDelete, 1, "flex");
       tx++;
       entities.delete(e.name);
       return "{}";
     },
-    addField(entityName, fieldJson) {
+    /** The guest's gated schema write (ADR-302 decision 8): {@link keyed} around {@link addFieldApply}. */
+    addField(entityName, fieldJson, idempotencyKey) {
+      return keyed(idempotencyKey, fieldJson, "field.create", entityName, "", () => ({
+        name: (() => { const b = parseBody(fieldJson); return isObj(b) && typeof b.name === "string" ? b.name : ""; })(),
+        validated: fieldDefinition(parseNewField(parseBody(fieldJson))),
+        write: () => ({ answer: state.addFieldApply(entityName, fieldJson) }),
+      }));
+    },
+    addFieldApply(entityName, fieldJson) {
       const body = parseBody(fieldJson);
       const e = resolveEntity(entityName);
       const spec = parseNewField(body);
@@ -716,7 +851,22 @@ export function createFlexState(world) {
       e.fields.push(f);
       return JSON.stringify(fieldDoc(f));
     },
-    updateField(entityName, fieldName, patchJson) {
+    /** The guest's gated schema write (ADR-302 decision 8): {@link keyed} around {@link updateFieldApply}. */
+    updateField(entityName, fieldName, patchJson, idempotencyKey) {
+      return keyed(idempotencyKey, patchJson, "field.update", entityName, fieldName, (s) => ({
+        name: fieldName,
+        validated: fieldPatchDocument(
+          // The entity resolves first, as flex-jit's route does (not_found before the key is read).
+          (() => {
+            const f = liveFields(resolveEntity(entityName, s)).find((x) => x.name === fieldName);
+            return f ? { type: f.type, parsed: f.parsed } : null;
+          })(),
+          parseBody(patchJson),
+        ),
+        write: () => ({ answer: state.updateFieldApply(entityName, fieldName, patchJson) }),
+      }));
+    },
+    updateFieldApply(entityName, fieldName, patchJson) {
       const body = parseBody(patchJson);
       if (!isObj(body)) throw validation("field patch body must be an object");
       if ("type" in body || "config" in body) {
@@ -759,7 +909,15 @@ export function createFlexState(world) {
       if (dflt !== undefined) f.default = dflt;
       return doc();
     },
-    updateEntity(name, patchJson) {
+    /** The guest's gated schema write (ADR-302 decision 8): {@link keyed} around {@link updateEntityApply}. */
+    updateEntity(name, patchJson, idempotencyKey) {
+      return keyed(idempotencyKey, patchJson, "entity.update", name, "", () => ({
+        name: "",
+        validated: entityPatchDocument(parseBody(patchJson)),
+        write: () => ({ answer: state.updateEntityApply(name, patchJson) }),
+      }));
+    },
+    updateEntityApply(name, patchJson) {
       const body = parseBody(patchJson);
       if (!isObj(body)) throw validation("entity patch body must be an object");
       if ("name" in body || "fields" in body) {
@@ -780,7 +938,15 @@ export function createFlexState(world) {
       e.displayName = displayName;
       return JSON.stringify(entityDoc(e));
     },
-    removeField(entityName, fieldName) {
+    /** The guest's gated schema write (ADR-302 decision 8): {@link keyed} around {@link removeFieldApply}. */
+    removeField(entityName, fieldName, idempotencyKey) {
+      return keyed(idempotencyKey, undefined, "field.delete", entityName, fieldName, () => ({
+        name: fieldName,
+        validated: undefined,
+        write: () => ({ answer: state.removeFieldApply(entityName, fieldName) }),
+      }));
+    },
+    removeFieldApply(entityName, fieldName) {
       const e = resolveEntity(entityName);
       admit(world, FLEX_METERS.fieldDelete, 1, "flex");
       const f = liveFields(e).find((x) => x.name === fieldName);
@@ -911,7 +1077,7 @@ export function createFlexState(world) {
           let e = entities.get(name);
           if (!e) {
             const plain = Object.entries(d.fields ?? {}).filter(([, f]) => f.type !== "relation").map(([n, f]) => spec(n, f));
-            state.createEntity(JSON.stringify({ name, ...(d.display_name ? { display_name: d.display_name } : {}), fields: plain }));
+            state.createEntityApply(JSON.stringify({ name, ...(d.display_name ? { display_name: d.display_name } : {}), fields: plain }));
             e = entities.get(name);
             e.orgPath = "/";
           }
@@ -925,7 +1091,7 @@ export function createFlexState(world) {
           for (const [n, f] of Object.entries(d.fields ?? {})) {
             if (liveFields(e).some((x) => x.name === n)) continue;
             if (f.type === "relation" && !entities.has(f.target)) throw validation(`relation '${name}.${n}' targets no entity '${f.target}'`, n);
-            state.addField(name, JSON.stringify(spec(n, f)));
+            state.addFieldApply(name, JSON.stringify(spec(n, f)));
           }
         }
         for (const u of applied) u.apply();
@@ -991,9 +1157,9 @@ export function createFlexState(world) {
       const saved = world.quota.suspend();
       try {
         if (existing) {
-          return { created: false, record: JSON.parse(state.updateRecord(entityName, existing.id, JSON.stringify({ data }))) };
+          return { created: false, record: JSON.parse(state.updateRecord(entityName, existing.id, JSON.stringify({ data }), internalKey("seed"))) };
         }
-        const record = JSON.parse(state.createRecord(entityName, JSON.stringify({ data })));
+        const record = JSON.parse(state.createRecord(entityName, JSON.stringify({ data }), internalKey("seed")));
         records.get(record.id).key = key;
         return { created: true, record };
       } finally {
@@ -1029,12 +1195,12 @@ export function createFlexState(world) {
     },
     createEntityUnmetered(spec) {
       const saved = world.quota.suspend();
-      try { return state.createEntity(JSON.stringify(spec)); } finally { world.quota.resume(saved); }
+      try { return state.createEntityApply(JSON.stringify(spec)); } finally { world.quota.resume(saved); }
     },
     /** Seed one record through the create path (validation included); returns the record doc. */
     insert(entityName, data) {
       const saved = world.quota.suspend();
-      try { return JSON.parse(state.createRecord(entityName, JSON.stringify({ data }))); } finally { world.quota.resume(saved); }
+      try { return JSON.parse(state.createRecord(entityName, JSON.stringify({ data }), internalKey("insert"))); } finally { world.quota.resume(saved); }
     },
     /** The live records of an entity, as record docs, in id order. */
     records(entityName) {

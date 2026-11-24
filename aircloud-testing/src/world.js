@@ -65,6 +65,9 @@ function createFaults() {
   };
 }
 
+/** The double's tenant id (a fixed UUIDv7): derived ids are reproducible across runs. */
+export const DOUBLE_TENANT_ID = "018f0000-0000-7000-8000-00000000d0b1";
+
 export function createWorld() {
   const w = {};
   /** The generated contract projection: gated meters, capture arms, codes, the WIT model. */
@@ -76,6 +79,9 @@ export function createWorld() {
     /** Every capability call, in order: { interface, function, capability, args, correlationId, outcome }. */
     w.calls = [];
     w.environment = "production";
+    /** The tenant the double's world stands for: the first leg of every tenant-scoped derived id (a comms send's
+     * message id, ADR-302 decision 8), stable for the world's life. */
+    w.tenantId = DOUBLE_TENANT_ID;
     for (const [name, factory] of Object.entries(STATE_FACTORIES)) w[name] = factory(w);
     return w;
   };

@@ -276,6 +276,13 @@ export const CONTRACT = deepFreeze({
                   "kind": "prim",
                   "name": "string"
                 }
+              },
+              {
+                "name": "idempotency-key",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
               }
             ],
             "result": {
@@ -314,6 +321,13 @@ export const CONTRACT = deepFreeze({
                   "kind": "prim",
                   "name": "string"
                 }
+              },
+              {
+                "name": "idempotency-key",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
               }
             ],
             "result": {
@@ -345,6 +359,13 @@ export const CONTRACT = deepFreeze({
                   "kind": "prim",
                   "name": "string"
                 }
+              },
+              {
+                "name": "idempotency-key",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
               }
             ],
             "result": {
@@ -371,6 +392,13 @@ export const CONTRACT = deepFreeze({
             "params": [
               {
                 "name": "entity-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "idempotency-key",
                 "type": {
                   "kind": "prim",
                   "name": "string"
@@ -439,6 +467,13 @@ export const CONTRACT = deepFreeze({
                   "kind": "prim",
                   "name": "string"
                 }
+              },
+              {
+                "name": "idempotency-key",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
               }
             ],
             "result": {
@@ -466,6 +501,13 @@ export const CONTRACT = deepFreeze({
               },
               {
                 "name": "field-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "idempotency-key",
                 "type": {
                   "kind": "prim",
                   "name": "string"
@@ -508,6 +550,13 @@ export const CONTRACT = deepFreeze({
                   "kind": "prim",
                   "name": "string"
                 }
+              },
+              {
+                "name": "idempotency-key",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
               }
             ],
             "result": {
@@ -539,6 +588,13 @@ export const CONTRACT = deepFreeze({
                   "kind": "prim",
                   "name": "string"
                 }
+              },
+              {
+                "name": "idempotency-key",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
               }
             ],
             "result": {
@@ -566,6 +622,13 @@ export const CONTRACT = deepFreeze({
               },
               {
                 "name": "patch-json",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
+              },
+              {
+                "name": "idempotency-key",
                 "type": {
                   "kind": "prim",
                   "name": "string"
@@ -1292,6 +1355,13 @@ export const CONTRACT = deepFreeze({
                   "kind": "prim",
                   "name": "string"
                 }
+              },
+              {
+                "name": "idempotency-key",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
               }
             ]
           },
@@ -1438,6 +1508,13 @@ export const CONTRACT = deepFreeze({
                     ]
                   }
                 }
+              },
+              {
+                "name": "idempotency-key",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
+                }
               }
             ]
           },
@@ -1518,6 +1595,13 @@ export const CONTRACT = deepFreeze({
                   "kind": "named",
                   "iface": "comms-whatsapp",
                   "name": "latency-tier"
+                }
+              },
+              {
+                "name": "idempotency-key",
+                "type": {
+                  "kind": "prim",
+                  "name": "string"
                 }
               }
             ]
@@ -3099,12 +3183,15 @@ export const CONTRACT = deepFreeze({
     }
   },
   "errorCodes": [
+    "capability.commit_outcome_unknown",
     "capability.credential_key_invalid",
     "capability.credential_not_found",
     "capability.credential_revoked",
     "capability.destination_forbidden",
+    "capability.effect_in_progress",
     "capability.forbidden",
     "capability.header_conflict",
+    "capability.idempotency_key_reused",
     "capability.internal",
     "capability.membership_required",
     "capability.not_found",
@@ -3118,8 +3205,10 @@ export const CONTRACT = deepFreeze({
     "capability.upstream_error",
     "capability.upstream_unsupported",
     "capability.validation",
+    "comms.commit_outcome_unknown",
     "comms.custody_unprovisioned",
     "comms.forbidden",
+    "comms.idempotency_key_reused",
     "comms.identity_unresolved",
     "comms.internal",
     "comms.latency_tier_immature",
@@ -3135,17 +3224,22 @@ export const CONTRACT = deepFreeze({
     "comms.resolver_unavailable",
     "comms.risk_tier_undeclared",
     "comms.send_admission_withheld",
+    "comms.send_in_progress",
     "comms.sending_halted",
     "comms.unauthenticated",
     "comms.validation",
     "flex.changeset_not_draft",
+    "flex.commit_outcome_unknown",
     "flex.complexity_cap",
     "flex.environment_required",
     "flex.forbidden",
+    "flex.idempotency_key_reused",
     "flex.immutable_field",
     "flex.internal",
     "flex.membership_required",
     "flex.migration_contracting",
+    "flex.mutation_abandoned",
+    "flex.mutation_in_progress",
     "flex.name_conflict",
     "flex.not_found",
     "flex.org_node_archived",
@@ -3162,12 +3256,16 @@ export const CONTRACT = deepFreeze({
     "flex.validation",
     "flex.write_fenced",
     "functions.artifact_unsupported",
+    "functions.commit_outcome_unknown",
+    "functions.component_incompatible",
     "functions.conflict",
     "functions.deadline_exceeded",
+    "functions.dispatch_lease_expired",
     "functions.execution_error",
     "functions.forbidden",
     "functions.guest_no_response",
     "functions.guest_server_error",
+    "functions.host_memory_exhausted",
     "functions.instantiation_failed",
     "functions.internal",
     "functions.invocation_filter_unknown",
@@ -3192,6 +3290,7 @@ export const CONTRACT = deepFreeze({
     "comms.mail.send",
     "comms.whatsapp.send",
     "deploy.app.deploy",
+    "deploy.build.duration",
     "deploy.database.create",
     "deploy.database.fork",
     "deploy.site.egress_bytes",
@@ -3219,6 +3318,9 @@ export const CONTRACT = deepFreeze({
     ],
     "deploy.app.deploy": [
       "hard_block"
+    ],
+    "deploy.build.duration": [
+      "allow_overage"
     ],
     "deploy.database.create": [
       "hard_block"
@@ -3350,6 +3452,8 @@ export const CONTRACT = deepFreeze({
         "elevation"
       ],
       "function": [
+        "end_user",
+        "node",
         "elevation"
       ],
       "group_by": [
@@ -3492,7 +3596,8 @@ export const CONTRACT = deepFreeze({
     "minLength": 1,
     "maxLength": 100,
     "pattern": "^[^\\p{Cc}\\p{Z}](?:[^\\p{Cc}]*[^\\p{Cc}\\p{Z}])?$"
-  }
+  },
+  "busMessageMax": 1048576
 });
 
 function deepFreeze(o) {

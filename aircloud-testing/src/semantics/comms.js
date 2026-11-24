@@ -10,13 +10,27 @@
 //     then the wallet under `comms.whatsapp.send` for one unit.
 //   * consent: control-plane/internal/api/consent.go — its codes are the httperr envelope's
 //     (`bad_request`, `conflict`, `not_found`), passed through verbatim by the host.
-// Non-production arm (functions/src/caps_comms.rs *_send_capture): no validation, no dial, the
-// synthetic `message-id: "capture:<uuid>"`, and a capture record carrying mail recipient DOMAINS
-// only, or `whatsapp:` and nothing after it.
+// Non-production arm (functions/src/caps_comms.rs *_send_capture): the idempotency key's grammar, no
+// other validation, no dial, the derived `message-id: "capture:<message-id>"` (one capture record per
+// key: a retried preview captures once), and a capture record carrying mail recipient DOMAINS only, or
+// `whatsapp:` and nothing after it. The capture keeps no memory of the request (no reuse detection).
+//
+// THE IDEMPOTENCY KEY (ADR-302 decision 8; design 2026-11-05-comms-send-idempotency): required on both
+// channels (1-128 bytes, no control character — else `comms.validation`, details.field); the message
+// id is IDv5(NS_COMMS_MESSAGE, tenant ‖ 0 ‖ acting node ‖ 0 ‖ channel ‖ 0 ‖ environment ‖ 0 ‖ key),
+// the gateway's own derivation (src/idv5.js, held to the platform vectors). Production remembers each
+// key: the same key with the same request returns the first outcome (one debit, one recorded send),
+// and the same key with a different request is `comms.idempotency_key_reused`, details {message_id,
+// first_seen_at}. A refused send binds no key. The double never produces `comms.send_in_progress`:
+// it has no concurrent submission or lost rail answer to be in progress behind.
 //
 // Sync: the two gateway caps below are a declared lockstep mirror of send.go's constants
 // (recipientCap, bodyCap — Provisional there); send.go is the canonical carrier.
+import { createHash } from "node:crypto";
 import { CapabilityFailure, DoubleMisuseError } from "../errors.js";
+import { idv5, scopedKey } from "../idv5.js";
+import { NS_COMMS_MESSAGE } from "../namespaces_gen.js";
+import { IDEMPOTENCY_KEY_REFUSAL as KEY_REFUSAL_MESSAGE, validIdempotencyKey } from "../idempotencykey_gen.js";
 import { admit } from "./quota.js";
 
 const RECIPIENT_CAP = 50;
@@ -51,11 +65,36 @@ function mailDomains(req) {
 
 const httperr = (code, message) => new CapabilityFailure(code, message, {});
 
+// The key's grammar and refusal, the gateway's (commsgw validateIdempotencyKey) and the host's (caps_comms.rs): all three
+// are generated from the platform's one grammar, contracts/durability/v1/idempotency-key.json
+// (scripts/dev/gen-idempotency-key.sh).
+export { KEY_REFUSAL_MESSAGE };
+function checkKey(key) {
+  if (!validIdempotencyKey(key)) throw new CapabilityFailure("comms.validation", KEY_REFUSAL_MESSAGE, { field: "idempotency_key" });
+}
+
+/** The derived comms message id (ADR-302 decision 8). */
+export function commsMessageId(tenantId, orgPath, channel, environment, key) {
+  return idv5(NS_COMMS_MESSAGE, scopedKey(tenantId, orgPath, channel, environment, key));
+}
+
+// The canonical request digest: the semantic fields in a fixed order, recipient order kept, headers stable-sorted by
+// their canonical (lower-case) name, duplicates in the caller's order, the environment appended.
+function digestOf(fields) {
+  return createHash("sha256").update(JSON.stringify(fields)).digest("hex");
+}
+function canonicalHeaders(headers) {
+  return [...headers].map(([k, v], i) => [k.toLowerCase(), v, i])
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[2] - b[2])).map(([k, v]) => [k, v]);
+}
+
 export function createCommsState(world) {
   const sent = { mail: [], whatsapp: [] };
   const captures = [];
   const suppressions = [];
   const consents = [];
+  // Production's key memory: message id → { digest, firstSeenAt, response }.
+  const keyed = new Map();
 
   function suppressedAmong(channel, addresses) {
     return addresses.filter((a) => suppressions.some((s) => s.channel === channel && s.address === a));
@@ -75,10 +114,31 @@ export function createCommsState(world) {
   function nowRfc3339() {
     return new Date(Math.floor(world.clock.nowMs() / 1000) * 1000).toISOString().replace(".000Z", "Z");
   }
-  function capture(capability, destination) {
-    const captureId = world.newId();
-    captures.push({ captureId, capability, destination, method: "SEND" });
+  function messageIdFor(channel, key) {
+    return commsMessageId(world.tenantId, world.actingNode.current(), channel, world.environment, key);
+  }
+  function capture(capability, channel, key, destination) {
+    checkKey(key);
+    const captureId = messageIdFor(channel, key);
+    if (!captures.some((c) => c.captureId === captureId)) captures.push({ captureId, capability, destination, method: "SEND" });
     return { messageId: `capture:${captureId}` };
+  }
+  // keyedSend runs a production send under its key: a replay answers the first outcome, a different request under
+  // the key is refused by name, and only a send that SUCCEEDED binds the key (a refusal binds nothing).
+  function keyedSend(channel, key, digest, send) {
+    checkKey(key);
+    const messageId = messageIdFor(channel, key);
+    const prior = keyed.get(messageId);
+    if (prior) {
+      if (prior.digest !== digest) {
+        throw new CapabilityFailure("comms.idempotency_key_reused",
+          "the idempotency key already names a different message", { message_id: messageId, first_seen_at: prior.firstSeenAt });
+      }
+      return prior.response;
+    }
+    const response = send(messageId);
+    keyed.set(messageId, { digest, firstSeenAt: nowRfc3339(), response });
+    return response;
   }
 
   const state = {
@@ -98,7 +158,8 @@ export function createCommsState(world) {
 
     // ── the WIT surface ──────────────────────────────────────────────────────────────────
     sendMail(req) {
-      if (world.linkArm("comms.mail.send") === "capture") return capture("comms.mail.send", mailDomains(req));
+      if (world.linkArm("comms.mail.send") === "capture") return capture("comms.mail.send", "mail", req.idempotencyKey, mailDomains(req));
+      checkKey(req.idempotencyKey);
       if (req.to.length === 0) throw new CapabilityFailure("comms.validation", "to must be non-empty", {});
       const html = req.html ?? "";
       const text = req.text ?? "";
@@ -122,13 +183,18 @@ export function createCommsState(world) {
       if (suppressed.length > 0) {
         throw new CapabilityFailure("comms.recipient_suppressed", "one or more recipients are on the suppression list", { suppressed });
       }
-      admit(world, "comms.mail.send", recips.length, "comms");
-      const messageId = world.newId();
-      sent.mail.push({ messageId, recipients: recips, ...req });
-      return { messageId };
+      const digest = digestOf(["mail", req.to.map((a) => parseMailAddress(a)), req.cc.map((a) => parseMailAddress(a)),
+        req.bcc.map((a) => parseMailAddress(a)), req.replyTo ? parseMailAddress(req.replyTo) : null, req.fromName ?? null,
+        req.subject, req.html ?? null, req.text ?? null, canonicalHeaders(req.headers), world.environment]);
+      return keyedSend("mail", req.idempotencyKey, digest, (messageId) => {
+        admit(world, "comms.mail.send", recips.length, "comms");
+        sent.mail.push({ messageId, recipients: recips, ...req });
+        return { messageId };
+      });
     },
     sendWhatsapp(req) {
-      if (world.linkArm("comms.whatsapp.send") === "capture") return capture("comms.whatsapp.send", "whatsapp:");
+      if (world.linkArm("comms.whatsapp.send") === "capture") return capture("comms.whatsapp.send", "whatsapp", req.idempotencyKey, "whatsapp:");
+      checkKey(req.idempotencyKey);
       if (!E164.test(req.to)) {
         throw new CapabilityFailure("comms.validation", "to must be an E.164 phone number in international form, e.g. +5511987650001", { field: "to" });
       }
@@ -143,10 +209,12 @@ export function createCommsState(world) {
       if (!activeConsent("whatsapp", req.to)) {
         throw new CapabilityFailure("comms.recipient_consent_absent", "this recipient has not given you consent to be messaged on WhatsApp", { unconsented: [req.to] });
       }
-      admit(world, "comms.whatsapp.send", 1, "comms");
-      const messageId = world.newId();
-      sent.whatsapp.push({ messageId, ...req });
-      return { messageId };
+      const digest = digestOf(["whatsapp", req.to, req.text, req.latencyTier, world.environment]);
+      return keyedSend("whatsapp", req.idempotencyKey, digest, (messageId) => {
+        admit(world, "comms.whatsapp.send", 1, "comms");
+        sent.whatsapp.push({ messageId, ...req });
+        return { messageId };
+      });
     },
     grant(req) {
       if ((req.channel ?? "").trim() === "" || (req.address ?? "").trim() === "") {

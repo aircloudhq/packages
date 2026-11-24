@@ -53,6 +53,52 @@ it("creates a pet", async () => {
   refusal's `e.payload.correlationId`.
 - **Egress** never leaves the process: register answers with `world.credential.respond(...)`; an
   unanswered egress fails the test rather than inventing a reply.
+- **Comms sends are keyed, as the platform's are** (ADR-302 decision 8). `comms-mail.send` and
+  `comms-whatsapp.send` require `idempotencyKey` (1 to 128 bytes, no control characters; refused
+  `comms.validation` naming the field otherwise). The message id is derived from the key exactly as the
+  platform derives it (`commsMessageId`), so the same key and request answer the first outcome with one
+  recorded send, and the same key with a different request throws `comms.idempotency_key_reused`. In
+  preview the id carries the `capture:` prefix and the capture is recorded once per key. Derive a key
+  from the business fact (`order:<id>:confirmation`), or from the invocation's `x-correlation-id` in a
+  cron- or event-triggered function.
+- **Flex mutations and bus publishes are keyed the same way** (ADR-302 decision 8). The three record
+  mutations (`flex-mutate.create-record`, `update-record`, `delete-record`) and the six schema writes
+  (`flex-schema.create-entity`, `update-entity`, `delete-entity`, `add-field`, `update-field`,
+  `remove-field`) take a trailing `idempotencyKey`; `bus.publish` takes it in its request
+  (`{ topic, payload, idempotencyKey }`). A key is scoped to the tenant, the acting node, the environment
+  and the acting principal (and an event's topic), as the platform scopes it: a replay answers the first outcome without a second
+  write or charge, and the same key with a different request throws `flex.idempotency_key_reused` or
+  `capability.idempotency_key_reused`. Payloads are I-JSON (no duplicate keys, no U+0000, numbers exactly
+  representable as doubles), refused `flex.validation` / `capability.validation` otherwise.
+
+## The idempotency keys
+
+Every keyed capability shares one key grammar (`contracts/durability/v1/idempotency-key.json`: 1 to 128
+bytes, no control characters, compared byte for byte), and the double derives every id and digest from
+the same contracts the platform does:
+
+| carrier | what it holds |
+|---|---|
+| `src/idempotencykey_gen.js` | the key grammar (`validIdempotencyKey`), generated |
+| `src/idv5.js`, `src/namespaces_gen.js` | the RFC 9562 name-based ids over the declared namespaces (`contracts/durability/v1/idv5-namespaces.json`, the namespaces generated) |
+| `src/canonical-json.js` | the RFC 8785 canonical form with the I-JSON refusal, and the composite request digest, held to `contracts/durability/v1/request-digest-vectors.json` |
+| `src/semantics/keys.js` | the per-capability key memories: the bus event id, the Flex mutation key id and request digest |
+| `src/semantics/comms.js` | the comms message id (`commsMessageId`) |
+
+3.0.0, the release that carries `idempotencyKey`, is the floor for every function that sends
+mail or WhatsApp, mutates Flex or publishes an event: the platform refuses a call without the key
+(`comms.validation`, `flex.validation` or `capability.validation`, naming the field), and it refuses to run
+a component built against an earlier WIT shape (`functions.component_incompatible`). Add the key to every
+such call and rebuild the component.
+
+## Migrating from 2.x
+
+3.0.0 makes the idempotency key a required part of every keyed capability call, as the platform does
+(above): a `comms-mail.send` or `comms-whatsapp.send` request without `idempotencyKey`, a `bus.publish`
+request without it, and a Flex record mutation or schema write without the trailing key are refused
+where 2.x accepted them. Add a key derived from the business fact to each such call (the same key for a
+retry of the same request), rebuild the component, and move the test package and the product to 3.0.0
+together.
 
 ## Migrating from 1.x
 

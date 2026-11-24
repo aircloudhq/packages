@@ -168,7 +168,7 @@ export function createEntriesState(w) {
     /**
      * Resolve the entry `d` names for `request`, as the host does before the guest runs: either
      * {refusal: {status, code, message, details}} — the host's answer, the guest never runs — or
-     * {module, request, frame: {entry, acting, session}}.
+     * {module, request, frame: {function, entry, acting, session, elevate}}.
      */
     async resolve(d, request) {
       const kind = descriptorKind(d);
@@ -234,7 +234,7 @@ export function createEntriesState(w) {
       // The function's own [[elevate]] declarations, as the release model carries them to the host
       // (functions/src/release_model.rs): the only ones an aggregate-elevated call of this invocation stays inside.
       const elevate = (f.elevate ?? []).map((d) => ({ ...d, function: fn }));
-      return { module: join(root, f.module), request: guest, frame: { entry: resolved.entry, acting: null, session: resolved.session, elevate } };
+      return { module: join(root, f.module), request: guest, frame: { function: fn, entry: resolved.entry, acting: null, session: resolved.session, elevate } };
     },
   };
   return state;

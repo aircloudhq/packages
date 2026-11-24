@@ -1,8 +1,9 @@
 // LinkTo and ButtonTo: link_to / button_to as components. The URL goes through urlFor, so the
 // current page's `locale` parameter travels with every link (ADR-223 D7).
-import { createElement as h } from 'react';
+import { createElement as h, useMemo } from 'react';
 import { Link, useInRouterContext, useLocation, useNavigate, useResolvedPath } from 'react-router';
 import { api } from '../api.js';
+import { IDEMPOTENCY_KEY_HEADER, submissionKeys } from '../resource.js';
 import { urlFor } from '../helpers/url.js';
 
 function useHere() {
@@ -38,6 +39,9 @@ export function ButtonTo({ to, method = 'post', params, onDone, onError, childre
   const navigate = inRouter ? useNavigate() : null; // stable per tree position: the router context never appears or vanishes under a mounted component
   const action = useTarget(to);
   const m = String(method).toLowerCase();
+  // A mutation names its effect with an Idempotency-Key (ADR-302 decision 8): one per press, reused when the same
+  // press is retried after a failure, a new one after it succeeded.
+  const keys = useMemo(() => submissionKeys(), [action, m]);
   function onSubmit(event) {
     event.preventDefault();
     if (m === 'get') {
@@ -45,7 +49,14 @@ export function ButtonTo({ to, method = 'post', params, onDone, onError, childre
       else location.assign(action);
       return;
     }
-    api(m.toUpperCase(), action, params).then((r) => onDone?.(r), (e) => (onError ? onError(e) : undefined));
+    const headers = { [IDEMPOTENCY_KEY_HEADER]: keys.keyFor({ action, m, params }) };
+    api(m.toUpperCase(), action, params, { headers }).then(
+      (r) => {
+        keys.succeeded();
+        onDone?.(r);
+      },
+      (e) => (onError ? onError(e) : undefined),
+    );
   }
   return h(
     'form',
